@@ -1,32 +1,29 @@
 # Laravel WAF
 
-Laravel application-layer WAF protection for Nginx-hosted applications. It combines request inspection, rate limiting, challenge integration, optional host block decisions, authentication protection, notifications, and Prometheus observability.
-
-This project is deliberately layered:
+Application-layer protection for Laravel applications running behind Nginx.
+The package combines request inspection, rate limiting, browser challenges,
+authentication protection, notifications, host block decisions, and metrics.
 
 ```text
 upstream provider → iptables/ipset → Nginx → Laravel WAF → application
 ```
 
-It is not a replacement for upstream DDoS mitigation. Laravel cannot protect a server after its network link or host has already been saturated.
+## Features
 
-## Current scope
+- Detects common XSS, SQL injection, remote file inclusion, and local file inclusion patterns.
+- Applies configurable request actions: reject, challenge, or log.
+- Enforces global and route-aware request limits using Laravel's cache store.
+- Provides ALTCHA challenge verification, including support for existing bsv211 ALTCHA endpoints.
+- Supports an opt-in `?test` diagnostic trigger for challenge pages.
+- Applies country allow and deny rules through a local MaxMind database or a custom GeoIP resolver.
+- Protects login endpoints by IP and identifier, observes Laravel authentication events, and can issue expiring agent block decisions.
+- Sends security notifications through email or Slack with cooldown deduplication.
+- Exposes bounded Prometheus metrics for decisions, findings, notifications, errors, and latency.
+- Includes an optional Linux agent for signed, expiring IP block decisions sent over a Unix socket.
 
-The first implementation supports:
-
-- XSS, SQL injection, RFI, and LFI request signatures with bounded input inspection;
-- configurable allow/deny GeoIP policies through a built-in MaxMind resolver or a custom resolver;
-- route-aware application request-rate limiting;
-- login protection middleware plus Laravel failed-login, lockout, and successful-login events;
-- optional email and Slack security notifications with cooldown deduplication;
-- challenge mode with a complete ALTCHA verification flow;
-- optional, expiring IP block decisions for `laravel-waf-agent`;
-- Prometheus-compatible decision and latency metrics;
-- Nginx and iptables/ipset deployment guidance.
-
-These are application-layer controls. They complement, rather than replace,
-parameterized database queries, output encoding, secure file handling, Laravel
-authentication throttling, Nginx limits, and upstream DDoS mitigation.
+These controls operate at the Laravel application layer. They complement
+parameterized database queries, output encoding, secure file handling, Nginx
+limits, and upstream DDoS protection.
 
 ## Installation
 
@@ -35,12 +32,7 @@ composer require billingserv/laravel-waf
 php artisan vendor:publish --tag=laravel-waf-config
 ```
 
-ALTCHA support is included. The package accepts both the legacy ALTCHA
-payload format used by existing bsv211 deployments and the current ALTCHA
-PHP library format. See [`docs/challenge.md`](docs/challenge.md).
-
-Add the unified middleware to the application's global middleware stack. It
-runs request rules before the existing DDoS limiter:
+Register the unified middleware globally:
 
 ```php
 // bootstrap/app.php (Laravel 11+)
@@ -49,27 +41,33 @@ runs request rules before the existing DDoS limiter:
 })
 ```
 
-For Laravel versions using `app/Http/Kernel.php`, append the same class to
-`$middleware`. Use `DdosProtection` or `RequestInspection` separately only
-when you deliberately want one layer without the other; do not register
-`WafProtection` and `DdosProtection` together.
+For applications using `app/Http/Kernel.php`, append the same class to the
+global `$middleware` stack. `WafProtection` includes request inspection and
+DDoS rate limiting; do not register `DdosProtection` alongside it.
 
-The middleware uses Laravel's configured cache/rate-limiter store. Use Redis or
-another shared store when the application has multiple PHP workers or servers.
+The package uses Laravel's configured cache/rate-limiter store. Use Redis or
+another shared store when running multiple PHP workers or application servers.
 
-See [`docs/request-rules.md`](docs/request-rules.md),
-[`docs/login-protection.md`](docs/login-protection.md), and
-[`docs/notifications.md`](docs/notifications.md) for configuration.
+## Configuration
 
-## Nginx comes first
+- [`docs/request-rules.md`](docs/request-rules.md) — request rules, actions, exclusions, and GeoIP.
+- [`docs/login-protection.md`](docs/login-protection.md) — login middleware and authentication events.
+- [`docs/notifications.md`](docs/notifications.md) — email, Slack, and custom notification sinks.
+- [`docs/challenge.md`](docs/challenge.md) — ALTCHA configuration and challenge testing.
+- [`docs/ddos-protection.md`](docs/ddos-protection.md) — application rate limiting and layered deployment.
+- [`docs/nginx-ddos.md`](docs/nginx-ddos.md) — Nginx, iptables, and ipset guidance.
 
-Laravel is too late to be the only DDoS control. Apply request, connection, timeout, body-size, and method restrictions in Nginx first. See [`docs/nginx-ddos.md`](docs/nginx-ddos.md).
+## Nginx and host protection
 
-## Agent
+Nginx should enforce connection limits, request rates, timeouts, body-size
+limits, allowed methods, and cheap request rejection before Laravel runs. The
+optional [`agent/`](agent/) service can update administrator-created ipsets
+when the Laravel WAF sends a valid signed decision.
 
-The optional [`agent/`](agent/) component is a small Linux service that accepts signed, expiring block decisions over a local Unix socket and updates administrator-created ipsets. It does not run XDP/eBPF and does not modify iptables rules automatically.
+Laravel cannot protect a server after its network link or host resources have
+already been saturated by a volumetric attack.
 
-## Metrics
+## Prometheus
 
 Prometheus support is optional:
 
@@ -77,11 +75,11 @@ Prometheus support is optional:
 composer require promphp/prometheus_client_php
 ```
 
-Configure its shared storage, and enable the metrics route only behind Nginx allowlisting or authentication. Never expose the endpoint publicly by default.
+Enable the metrics route only behind Nginx allowlisting or authentication. Do
+not expose it publicly by default. See [`docs/metrics.md`](docs/metrics.md).
 
-See [`docs/metrics.md`](docs/metrics.md) for the metric names and Grafana integration notes.
-
-Metric labels are deliberately bounded. IP addresses, URLs, query strings, headers, user IDs, and request bodies are never metric labels.
+Metric labels are bounded: IP addresses, URLs, query strings, headers, user
+IDs, request bodies, and attack payloads are not used as labels.
 
 ## Security
 

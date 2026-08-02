@@ -41,7 +41,7 @@ final class DdosProtection
 
         if ($this->isTestTrigger($request)) {
             $request->attributes->set('laravel-waf.challenge_return_to', $this->testReturnTo($request));
-            $this->metrics->decision('challenge_test', 'test', $route);
+            $this->metrics->decision('blocked_test', 'test', $route);
 
             return $this->finish(
                 $this->challenge->respond($request, 60, 'test'),

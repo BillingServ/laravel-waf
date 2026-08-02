@@ -25,7 +25,7 @@ final class DefaultChallengeResponder implements ChallengeResponder
         ];
 
         if ($scope === 'test') {
-            return $this->failed($request);
+            return $this->blocked($request);
         }
 
         if ($request->expectsJson()) {
@@ -68,5 +68,31 @@ final class DefaultChallengeResponder implements ChallengeResponder
         $headers['Content-Type'] = 'text/html; charset=UTF-8';
 
         return new Response($body, 422, $headers);
+    }
+
+    private function blocked(Request $request): Response
+    {
+        $headers = [
+            'Cache-Control' => 'no-store',
+            'X-Laravel-Waf-Blocked' => 'true',
+        ];
+
+        if ($request->expectsJson()) {
+            return new JsonResponse([
+                'message' => 'Request blocked.',
+                'blocked' => true,
+                'scope' => 'test',
+            ], 403, $headers);
+        }
+
+        $retryUrl = $request->attributes->get('laravel-waf.challenge_return_to');
+        $body = ChallengePage::blocked(
+            (string) config('laravel-waf.challenge.blocked_title', 'Request blocked'),
+            (string) config('laravel-waf.challenge.blocked_message', 'This request was blocked by the site security policy.'),
+            is_string($retryUrl) ? $retryUrl : null,
+        );
+        $headers['Content-Type'] = 'text/html; charset=UTF-8';
+
+        return new Response($body, 403, $headers);
     }
 }

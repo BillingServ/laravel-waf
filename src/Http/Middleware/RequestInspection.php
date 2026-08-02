@@ -4,6 +4,7 @@ namespace BillingServ\LaravelWaf\Http\Middleware;
 
 use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
 use BillingServ\LaravelWaf\Contracts\DecisionSink;
+use BillingServ\LaravelWaf\Http\Responses\ChallengePage;
 use BillingServ\LaravelWaf\Security\BehaviorTracker;
 use BillingServ\LaravelWaf\Security\Finding;
 use BillingServ\LaravelWaf\Security\RequestRuleEngine;
@@ -150,10 +151,10 @@ final class RequestInspection
             return new JsonResponse(['message' => 'Request blocked.'], $status, $headers);
         }
 
-        $body = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            .'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            .'<title>Request blocked</title></head><body><main><h1>Request blocked</h1>'
-            .'<p>The application firewall blocked this request.</p></main></body></html>';
+        $body = ChallengePage::blocked(
+            (string) config('laravel-waf.challenge.blocked_title', 'Request blocked'),
+            (string) config('laravel-waf.challenge.blocked_message', 'This request was blocked by the site security policy.'),
+        );
         $headers['Content-Type'] = 'text/html; charset=UTF-8';
 
         return new Response($body, $status, $headers);

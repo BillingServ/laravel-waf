@@ -100,24 +100,28 @@ final class DdosProtectionTest extends TestCase
             'altcha' => $this->validAltchaPayload(),
         ])->assertStatus(422)
             ->assertSee('Verification failed')
-            ->assertSee('WAF / 02');
+            ->assertSee('Verification could not be completed.');
     }
 
-    public function test_opt_in_test_query_parameter_displays_the_failure_page(): void
+    public function test_opt_in_test_query_parameter_displays_the_blocked_page(): void
     {
         config()->set('laravel-waf.testing.enabled', true);
         config()->set('laravel-waf.challenge.provider', 'altcha');
+        config()->set('laravel-waf.challenge.theme', 'dark');
         config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost/altcha/challenge');
         config()->set('laravel-waf.challenge.altcha.hmac_key', 'test-altcha-secret');
 
         $server = ['REMOTE_ADDR' => '203.0.113.30'];
         $this->withServerVariables($server)
             ->get('/limited?test')
-            ->assertStatus(422)
-            ->assertHeader('X-Laravel-Waf-Challenge', 'failed')
-            ->assertSee('Verification failed')
-            ->assertSee('Try again')
+            ->assertStatus(403)
+            ->assertHeader('X-Laravel-Waf-Blocked', 'true')
+            ->assertSee('theme-dark')
+            ->assertSee('Why have I been blocked?')
+            ->assertSee('What can I do to resolve this?')
             ->assertDontSee('Additional verification required')
+            ->assertDontSee('Verification failed')
+            ->assertDontSee('Laravel WAF')
             ->assertDontSee('<altcha-widget');
     }
 

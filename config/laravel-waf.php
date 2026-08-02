@@ -224,6 +224,13 @@ return [
         'message' => 'Please complete the verification before continuing.',
         'failure_title' => 'Verification failed',
         'failure_message' => 'We could not confirm this request. Please try again.',
+        'blocked_title' => 'Request blocked',
+        'blocked_message' => 'This request was blocked by the site security policy.',
+        'theme' => env('LARAVEL_WAF_CHALLENGE_THEME', 'auto'), // auto|light|dark
+        // Optional white-label identity. Nothing is shown when these are empty.
+        'brand_name' => env('LARAVEL_WAF_CHALLENGE_BRAND_NAME'),
+        'logo_url' => env('LARAVEL_WAF_CHALLENGE_LOGO_URL'),
+        'favicon_url' => env('LARAVEL_WAF_CHALLENGE_FAVICON_URL'),
         'path' => env('LARAVEL_WAF_CHALLENGE_PATH', '_waf/challenge/verify'),
         'verify_route' => 'laravel-waf.challenge.verify',
         'cookie_name' => env('LARAVEL_WAF_CHALLENGE_COOKIE', 'laravel_waf_challenge'),

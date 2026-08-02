@@ -34,12 +34,22 @@ LARAVEL_WAF_ALTCHA_FIELD=altcha
 LARAVEL_WAF_ALTCHA_MAX_PAYLOAD_BYTES=65536
 LARAVEL_WAF_ALTCHA_CHALLENGE_ATTRIBUTE=challengeurl
 LARAVEL_WAF_ALTCHA_SCRIPT_URL=https://cdn.example.test/altcha.min.js
+
+LARAVEL_WAF_CHALLENGE_BRAND_NAME=Example
+LARAVEL_WAF_CHALLENGE_LOGO_URL=/assets/logo.svg
+LARAVEL_WAF_CHALLENGE_FAVICON_URL=/favicon.ico
+LARAVEL_WAF_CHALLENGE_THEME=auto
 ```
 
 `LARAVEL_WAF_ALTCHA_CHALLENGE_ATTRIBUTE` may be `challengeurl` for the
 existing widget integration or `challenge` for newer widget integrations.
 The challenge field and script URL are configurable so the WAF does not need
 to own the application's frontend setup.
+
+The interstitial is white-labeled by default and does not display the package
+name. Set the optional challenge brand, logo, and favicon variables when the
+site should identify itself on the page. Logo and favicon URLs may be
+same-origin paths or HTTPS URLs.
 
 ## Server signatures
 
@@ -92,7 +102,7 @@ malformed or expired payloads.
 
 ## Manual test trigger
 
-To render the failure page without waiting for a rate limit, enable the
+To render the blocked page without waiting for a rate limit, enable the
 diagnostic trigger temporarily:
 
 ```dotenv
@@ -111,7 +121,8 @@ but should normally only be used in local or staging environments. The
 parameter name and an optional required value are configurable with
 `LARAVEL_WAF_TESTING_PARAMETER` and `LARAVEL_WAF_TESTING_VALUE`.
 
-The trigger returns a `422` failure response and never issues a challenge
-token or verification cookie. It is intended for checking the failure state
+The trigger returns a `403` blocked response and never issues a challenge
+token or verification cookie. It is intended for checking the blocked state
 of the page; normal challenge behavior is still exercised by exceeding the
-configured limit.
+configured limit. Set `LARAVEL_WAF_CHALLENGE_THEME=dark` to force the dark
+theme, or leave it as `auto` to follow the visitor's system preference.

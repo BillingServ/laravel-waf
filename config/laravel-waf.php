@@ -222,6 +222,8 @@ return [
         'provider' => env('LARAVEL_WAF_CHALLENGE_PROVIDER', 'default'), // default|altcha
         'title' => 'Additional verification required',
         'message' => 'Please complete the verification before continuing.',
+        'failure_title' => 'Verification failed',
+        'failure_message' => 'We could not confirm this request. Please try again.',
         'path' => env('LARAVEL_WAF_CHALLENGE_PATH', '_waf/challenge/verify'),
         'verify_route' => 'laravel-waf.challenge.verify',
         'cookie_name' => env('LARAVEL_WAF_CHALLENGE_COOKIE', 'laravel_waf_challenge'),

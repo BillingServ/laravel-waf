@@ -98,10 +98,12 @@ final class DdosProtectionTest extends TestCase
         $this->withServerVariables($server)->post('/_waf/challenge/verify', [
             '_waf_challenge' => $matches[1],
             'altcha' => $this->validAltchaPayload(),
-        ])->assertStatus(422);
+        ])->assertStatus(422)
+            ->assertSee('Verification failed')
+            ->assertSee('WAF / 02');
     }
 
-    public function test_opt_in_test_query_parameter_displays_altcha_and_strips_it_after_verification(): void
+    public function test_opt_in_test_query_parameter_displays_the_failure_page(): void
     {
         config()->set('laravel-waf.testing.enabled', true);
         config()->set('laravel-waf.challenge.provider', 'altcha');
@@ -109,18 +111,14 @@ final class DdosProtectionTest extends TestCase
         config()->set('laravel-waf.challenge.altcha.hmac_key', 'test-altcha-secret');
 
         $server = ['REMOTE_ADDR' => '203.0.113.30'];
-        $challenge = $this->withServerVariables($server)->get('/limited?test');
-
-        $challenge->assertStatus(429)->assertSee('altcha-widget');
-        preg_match('/name="_waf_challenge" value="([^"]+)"/', $challenge->getContent(), $matches);
-        self::assertNotEmpty($matches[1] ?? null);
-
-        $verification = $this->withServerVariables($server)->post('/_waf/challenge/verify', [
-            '_waf_challenge' => $matches[1],
-            'altcha' => $this->validAltchaPayload(),
-        ]);
-
-        $verification->assertRedirect('/limited')->assertStatus(303);
+        $this->withServerVariables($server)
+            ->get('/limited?test')
+            ->assertStatus(422)
+            ->assertHeader('X-Laravel-Waf-Challenge', 'failed')
+            ->assertSee('Verification failed')
+            ->assertSee('Try again')
+            ->assertDontSee('Additional verification required')
+            ->assertDontSee('<altcha-widget');
     }
 
     private function validAltchaPayload(): string

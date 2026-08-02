@@ -92,7 +92,7 @@ malformed or expired payloads.
 
 ## Manual test trigger
 
-To render the same challenge page without waiting for a rate limit, enable the
+To render the failure page without waiting for a rate limit, enable the
 diagnostic trigger temporarily:
 
 ```dotenv
@@ -111,5 +111,7 @@ but should normally only be used in local or staging environments. The
 parameter name and an optional required value are configurable with
 `LARAVEL_WAF_TESTING_PARAMETER` and `LARAVEL_WAF_TESTING_VALUE`.
 
-After a successful verification, the `test` parameter is removed before the
-browser is redirected back to the original URL.
+The trigger returns a `422` failure response and never issues a challenge
+token or verification cookie. It is intended for checking the failure state
+of the page; normal challenge behavior is still exercised by exceeding the
+configured limit.

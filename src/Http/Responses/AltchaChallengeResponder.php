@@ -26,6 +26,11 @@ final class AltchaChallengeResponder implements ChallengeResponder
             'Retry-After' => (string) max(1, $retryAfter),
             'X-Laravel-Waf-Challenge' => 'required',
         ];
+
+        if ($scope === 'test') {
+            return $this->failed($request);
+        }
+
         $field = $this->field();
         $challengeUrl = $this->safeUrl(config('laravel-waf.challenge.altcha.challenge_url'));
         $returnTo = in_array(strtoupper($request->getMethod()), ['GET', 'HEAD'], true)
@@ -54,27 +59,42 @@ final class AltchaChallengeResponder implements ChallengeResponder
             return $this->unavailable($headers);
         }
 
-        $title = $this->escape($this->title);
-        $message = $this->escape($this->message);
-        $action = $this->escape($verifyUrl);
-        $token = $this->escape($token);
         $widget = $this->widget($challengeUrl, $field);
         $script = $this->script();
 
-        $body = '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            .'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            .'<title>'.$title.'</title>'.$script.'</head><body><main>'
-            .'<h1>'.$title.'</h1><p>'.$message.'</p>'
-            .'<form method="post" action="'.$action.'" autocomplete="off">'
-            .'<input type="hidden" name="_waf_challenge" value="'.$token.'">'
-            .$widget
-            .'<button type="submit">Continue</button></form>'
-            .'<noscript>JavaScript is required to complete this verification.</noscript>'
-            .'</main></body></html>';
+        $body = ChallengePage::required($this->title, $this->message, $verifyUrl, $token, $widget, $script);
 
         $headers['Content-Type'] = 'text/html; charset=UTF-8';
 
         return new Response($body, $this->status, $headers);
+    }
+
+    private function failed(Request $request): Response
+    {
+        $headers = [
+            'Cache-Control' => 'no-store',
+            'X-Laravel-Waf-Challenge' => 'failed',
+        ];
+
+        if ($request->expectsJson()) {
+            return new JsonResponse([
+                'message' => 'Challenge verification failed.',
+                'challenge' => false,
+                'provider' => 'altcha',
+                'verification_failed' => true,
+                'scope' => 'test',
+            ], 422, $headers);
+        }
+
+        $retryUrl = $request->attributes->get('laravel-waf.challenge_return_to');
+        $body = ChallengePage::failed(
+            (string) config('laravel-waf.challenge.failure_title', 'Verification failed'),
+            (string) config('laravel-waf.challenge.failure_message', 'We could not confirm this request. Please try again.'),
+            is_string($retryUrl) ? $retryUrl : null,
+        );
+        $headers['Content-Type'] = 'text/html; charset=UTF-8';
+
+        return new Response($body, 422, $headers);
     }
 
     private function widget(string $challengeUrl, string $field): string

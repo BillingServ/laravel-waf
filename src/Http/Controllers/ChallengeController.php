@@ -3,6 +3,7 @@
 namespace BillingServ\LaravelWaf\Http\Controllers;
 
 use BillingServ\LaravelWaf\Contracts\ChallengeVerifier;
+use BillingServ\LaravelWaf\Http\Responses\ChallengePage;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
@@ -57,7 +58,7 @@ final class ChallengeController
         if ($returnTo === null || ! $this->verifier->verify($payload)) {
             $this->metrics->decision('challenge_rejected', 'challenge', 'challenge');
 
-            return $this->rejected($request);
+            return $this->rejected($request, $returnTo);
         }
 
         try {
@@ -79,7 +80,7 @@ final class ChallengeController
             if (! $consumed || ! $replayFree) {
                 $this->metrics->decision('challenge_replay', 'challenge', 'challenge');
 
-                return $this->rejected($request);
+                return $this->rejected($request, $returnTo);
             }
         } catch (Throwable) {
             $this->metrics->error('challenge_replay_store');
@@ -143,7 +144,7 @@ final class ChallengeController
         return new Response('Too Many Requests', 429, $headers);
     }
 
-    private function rejected(Request $request): Response
+    private function rejected(Request $request, ?string $retryUrl = null): Response
     {
         $headers = ['Cache-Control' => 'no-store'];
 
@@ -151,7 +152,17 @@ final class ChallengeController
             return new JsonResponse(['message' => 'Challenge verification failed.'], 422, $headers);
         }
 
-        return new Response('Challenge verification failed.', 422, $headers);
+        $headers['Content-Type'] = 'text/html; charset=UTF-8';
+
+        return new Response(
+            ChallengePage::failed(
+                (string) config('laravel-waf.challenge.failure_title', 'Verification failed'),
+                (string) config('laravel-waf.challenge.failure_message', 'We could not confirm this request. Please try again.'),
+                $retryUrl,
+            ),
+            422,
+            $headers,
+        );
     }
 
     private function unavailable(Request $request): Response

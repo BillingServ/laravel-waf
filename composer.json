@@ -1,0 +1,63 @@
+{
+    "name": "billingserv/laravel-waf",
+    "description": "DDoS-focused application-layer protection for Laravel applications.",
+    "keywords": [
+        "laravel",
+        "waf",
+        "ddos",
+        "rate-limit",
+        "bot-protection",
+        "nginx",
+        "prometheus"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "BillingServ",
+            "homepage": "https://github.com/BillingServ"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "illuminate/cache": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/config": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/contracts": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/http": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/routing": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/support": "^10.0|^11.0|^12.0|^13.0"
+    },
+    "suggest": {
+        "promphp/prometheus_client_php": "Enable the optional Prometheus metrics endpoint.",
+        "predis/predis": "Use Redis-backed Prometheus aggregation without the phpredis extension."
+    },
+    "require-dev": {
+        "orchestra/testbench": "^8.0|^9.1|^10.0|^11.0",
+        "phpunit/phpunit": "^10.0|^11.0|^12.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "BillingServ\\LaravelWaf\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "BillingServ\\LaravelWaf\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "BillingServ\\LaravelWaf\\WafServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/phpunit",
+        "lint": "find src tests -name '*.php' -print0 | xargs -0 -n1 php -l"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

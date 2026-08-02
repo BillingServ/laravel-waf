@@ -1,0 +1,73 @@
+package protocol
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"net"
+	"regexp"
+	"strings"
+)
+
+const Version = 1
+
+var safeReason = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
+
+type Decision struct {
+	Version    int    `json:"version"`
+	Action     string `json:"action"`
+	IP         string `json:"ip"`
+	TTLSeconds int    `json:"ttl_seconds"`
+	Reason     string `json:"reason"`
+	Signature  string `json:"signature,omitempty"`
+}
+
+func (d Decision) Validate(maxTTL int) error {
+	if d.Version != Version {
+		return fmt.Errorf("unsupported protocol version")
+	}
+
+	if d.Action != "block_ip" && d.Action != "unblock_ip" {
+		return fmt.Errorf("unsupported action")
+	}
+
+	if net.ParseIP(d.IP) == nil {
+		return fmt.Errorf("invalid IP address")
+	}
+
+	if d.Action == "block_ip" {
+		if d.TTLSeconds < 1 || d.TTLSeconds > maxTTL {
+			return fmt.Errorf("TTL must be between 1 and %d seconds", maxTTL)
+		}
+	}
+
+	if !safeReason.MatchString(d.Reason) {
+		return fmt.Errorf("invalid reason")
+	}
+
+	return nil
+}
+
+func (d Decision) Canonical() string {
+	reason := base64.RawURLEncoding.EncodeToString([]byte(d.Reason))
+
+	return fmt.Sprintf("%d\n%s\n%s\n%d\n%s", d.Version, d.Action, d.IP, d.TTLSeconds, reason)
+}
+
+func (d Decision) Verify(secret []byte) bool {
+	if len(secret) == 0 {
+		return true
+	}
+
+	signature, err := hex.DecodeString(strings.TrimSpace(d.Signature))
+	if err != nil {
+		return false
+	}
+
+	digest := hmac.New(sha256.New, secret)
+	_, _ = digest.Write([]byte(d.Canonical()))
+
+	return hmac.Equal(signature, digest.Sum(nil))
+}

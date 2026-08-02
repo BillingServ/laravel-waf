@@ -29,7 +29,7 @@ final class AltchaChallengeResponder implements ChallengeResponder
         $field = $this->field();
         $challengeUrl = $this->safeUrl(config('laravel-waf.challenge.altcha.challenge_url'));
         $returnTo = in_array(strtoupper($request->getMethod()), ['GET', 'HEAD'], true)
-            ? $request->getRequestUri()
+            ? ($request->attributes->get('laravel-waf.challenge_return_to') ?: $request->getRequestUri())
             : '/';
         $token = $this->tokens->issueRequest(
             $request->ip() ?: 'unknown',

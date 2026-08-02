@@ -84,6 +84,14 @@ return [
         ],
     ],
 
+    'testing' => [
+        // Explicitly opt in before using /protected-route?test.
+        'enabled' => env('LARAVEL_WAF_TESTING_ENABLED', false),
+        'parameter' => env('LARAVEL_WAF_TESTING_PARAMETER', 'test'),
+        'value' => env('LARAVEL_WAF_TESTING_VALUE'),
+        'allow_production' => env('LARAVEL_WAF_TESTING_ALLOW_PRODUCTION', false),
+    ],
+
     'agent' => [
         'enabled' => env('LARAVEL_WAF_AGENT_ENABLED', false),
         'socket' => env('LARAVEL_WAF_AGENT_SOCKET', '/run/laravel-waf/agent.sock'),

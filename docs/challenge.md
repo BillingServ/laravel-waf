@@ -89,3 +89,27 @@ $this->app->bind(
 Custom responders should preserve the no-store response headers and should
 return a same-origin verification flow. Custom verifiers must fail closed for
 malformed or expired payloads.
+
+## Manual test trigger
+
+To render the same challenge page without waiting for a rate limit, enable the
+diagnostic trigger temporarily:
+
+```dotenv
+LARAVEL_WAF_TESTING_ENABLED=true
+```
+
+Then open any route that uses the WAF middleware with `?test`, for example:
+
+```text
+https://example.test/login?test
+```
+
+The trigger is disabled by default and is ignored in production. It can be
+enabled deliberately in production with `LARAVEL_WAF_TESTING_ALLOW_PRODUCTION`
+but should normally only be used in local or staging environments. The
+parameter name and an optional required value are configurable with
+`LARAVEL_WAF_TESTING_PARAMETER` and `LARAVEL_WAF_TESTING_VALUE`.
+
+After a successful verification, the `test` parameter is removed before the
+browser is redirected back to the original URL.

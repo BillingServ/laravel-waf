@@ -33,5 +33,6 @@ abstract class TestCase extends Orchestra
         $app['config']->set('laravel-waf.metrics.enabled', false);
         $app['config']->set('laravel-waf.challenge.cookie_secret', 'test-challenge-secret');
         $app['config']->set('laravel-waf.challenge.cookie_secure', false);
+        $app['config']->set('laravel-waf.testing.enabled', false);
     }
 }

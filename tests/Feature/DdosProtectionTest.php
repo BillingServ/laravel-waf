@@ -101,6 +101,28 @@ final class DdosProtectionTest extends TestCase
         ])->assertStatus(422);
     }
 
+    public function test_opt_in_test_query_parameter_displays_altcha_and_strips_it_after_verification(): void
+    {
+        config()->set('laravel-waf.testing.enabled', true);
+        config()->set('laravel-waf.challenge.provider', 'altcha');
+        config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost/altcha/challenge');
+        config()->set('laravel-waf.challenge.altcha.hmac_key', 'test-altcha-secret');
+
+        $server = ['REMOTE_ADDR' => '203.0.113.30'];
+        $challenge = $this->withServerVariables($server)->get('/limited?test');
+
+        $challenge->assertStatus(429)->assertSee('altcha-widget');
+        preg_match('/name="_waf_challenge" value="([^"]+)"/', $challenge->getContent(), $matches);
+        self::assertNotEmpty($matches[1] ?? null);
+
+        $verification = $this->withServerVariables($server)->post('/_waf/challenge/verify', [
+            '_waf_challenge' => $matches[1],
+            'altcha' => $this->validAltchaPayload(),
+        ]);
+
+        $verification->assertRedirect('/limited')->assertStatus(303);
+    }
+
     private function validAltchaPayload(): string
     {
         $altchaClass = class_exists('AltchaOrg\\Altcha\\V1\\Altcha')

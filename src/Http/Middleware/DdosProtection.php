@@ -39,6 +39,16 @@ final class DdosProtection
             return $this->finish($next($request), $startedAt);
         }
 
+        if ($this->isTestTrigger($request)) {
+            $request->attributes->set('laravel-waf.challenge_return_to', $this->testReturnTo($request));
+            $this->metrics->decision('challenge_test', 'test', $route);
+
+            return $this->finish(
+                $this->challenge->respond($request, 60, 'test'),
+                $startedAt,
+            );
+        }
+
         $ip = $request->ip() ?: 'unknown';
         $challengePassed = config('laravel-waf.challenge.enabled', false)
             && $this->challengeTokens->isPassed(
@@ -230,5 +240,47 @@ final class DdosProtection
         }
 
         return 'unnamed';
+    }
+
+    private function isTestTrigger(Request $request): bool
+    {
+        if (!config('laravel-waf.testing.enabled', false)
+            || !config('laravel-waf.challenge.enabled', false)
+            || (app()->environment('production') && !config('laravel-waf.testing.allow_production', false))) {
+            return false;
+        }
+
+        $parameter = config('laravel-waf.testing.parameter', 'test');
+        if (!is_string($parameter) || preg_match('/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/', $parameter) !== 1) {
+            return false;
+        }
+
+        if (!$request->query->has($parameter)) {
+            return false;
+        }
+
+        $expected = config('laravel-waf.testing.value');
+        if (!is_string($expected) || $expected === '') {
+            return true;
+        }
+
+        $value = $request->query($parameter);
+
+        return is_string($value) && hash_equals($expected, $value);
+    }
+
+    private function testReturnTo(Request $request): string
+    {
+        $uri = $request->getRequestUri();
+        [$path, $query] = array_pad(explode('?', $uri, 2), 2, null);
+        $parameter = (string) config('laravel-waf.testing.parameter', 'test');
+
+        if (is_string($query) && $query !== '') {
+            parse_str($query, $parameters);
+            unset($parameters[$parameter]);
+            $query = http_build_query($parameters);
+        }
+
+        return $path.($query !== '' ? '?'.$query : '');
     }
 }

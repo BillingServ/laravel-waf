@@ -30,4 +30,19 @@ final class RateLimitKey
     {
         return 'laravel-waf:challenge-payload:'.hash('sha256', $payload);
     }
+
+    public static function login(string $ip, string $identifier = ''): string
+    {
+        return 'laravel-waf:login:'.hash('sha256', $ip.'|'.strtolower(trim($identifier)));
+    }
+
+    public static function securityBlock(string $ip, string $category): string
+    {
+        return 'laravel-waf:security-block:'.hash('sha256', $ip.'|'.$category);
+    }
+
+    public static function notification(string $fingerprint): string
+    {
+        return 'laravel-waf:notification:'.hash('sha256', $fingerprint);
+    }
 }

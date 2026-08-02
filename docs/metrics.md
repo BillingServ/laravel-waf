@@ -20,7 +20,9 @@ The Laravel package records bounded series such as:
 
 ```text
 laravel_waf_decisions_total{action,scope,route}
+laravel_waf_findings_total{category,rule,action,route}
 laravel_waf_agent_blocks_total{outcome}
+laravel_waf_notifications_total{channel,outcome}
 laravel_waf_errors_total{component}
 laravel_waf_evaluation_duration_seconds
 ```

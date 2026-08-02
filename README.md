@@ -1,6 +1,6 @@
 # Laravel WAF
 
-Laravel application-layer protection for Nginx-hosted applications, starting with DDoS-conscious request limiting, challenge integration, host block decisions, and Prometheus observability.
+Laravel application-layer WAF protection for Nginx-hosted applications. It combines request inspection, rate limiting, challenge integration, optional host block decisions, authentication protection, notifications, and Prometheus observability.
 
 This project is deliberately layered:
 
@@ -12,16 +12,21 @@ It is not a replacement for upstream DDoS mitigation. Laravel cannot protect a s
 
 ## Current scope
 
-The first implementation focuses on:
+The first implementation supports:
 
-- application request-rate limiting;
-- route-aware limits without inspecting request bodies;
+- XSS, SQL injection, RFI, and LFI request signatures with bounded input inspection;
+- configurable allow/deny GeoIP policies through a built-in MaxMind resolver or a custom resolver;
+- route-aware application request-rate limiting;
+- login protection middleware plus Laravel failed-login, lockout, and successful-login events;
+- optional email and Slack security notifications with cooldown deduplication;
 - challenge mode with a complete ALTCHA verification flow;
 - optional, expiring IP block decisions for `laravel-waf-agent`;
 - Prometheus-compatible decision and latency metrics;
 - Nginx and iptables/ipset deployment guidance.
 
-XSS, SQL injection, RFI, LFI, geo rules, login protection, notifications, and XDP/eBPF are intentionally out of scope for this first slice.
+These are application-layer controls. They complement, rather than replace,
+parameterized database queries, output encoding, secure file handling, Laravel
+authentication throttling, Nginx limits, and upstream DDoS mitigation.
 
 ## Installation
 
@@ -34,18 +39,27 @@ ALTCHA support is included. The package accepts both the legacy ALTCHA
 payload format used by existing bsv211 deployments and the current ALTCHA
 PHP library format. See [`docs/challenge.md`](docs/challenge.md).
 
-Add the middleware to the application's global middleware stack. The exact registration depends on the Laravel version:
+Add the unified middleware to the application's global middleware stack. It
+runs request rules before the existing DDoS limiter:
 
 ```php
 // bootstrap/app.php (Laravel 11+)
 ->withMiddleware(function (Middleware $middleware): void {
-    $middleware->append(\\BillingServ\\LaravelWaf\\Http\\Middleware\\DdosProtection::class);
+    $middleware->append(\BillingServ\LaravelWaf\Http\Middleware\WafProtection::class);
 })
 ```
 
-For Laravel versions using `app/Http/Kernel.php`, append the same class to `$middleware`.
+For Laravel versions using `app/Http/Kernel.php`, append the same class to
+`$middleware`. Use `DdosProtection` or `RequestInspection` separately only
+when you deliberately want one layer without the other; do not register
+`WafProtection` and `DdosProtection` together.
 
-The middleware uses Laravel's configured cache/rate-limiter store. Use Redis or another shared store when the application has multiple PHP workers or servers.
+The middleware uses Laravel's configured cache/rate-limiter store. Use Redis or
+another shared store when the application has multiple PHP workers or servers.
+
+See [`docs/request-rules.md`](docs/request-rules.md),
+[`docs/login-protection.md`](docs/login-protection.md), and
+[`docs/notifications.md`](docs/notifications.md) for configuration.
 
 ## Nginx comes first
 

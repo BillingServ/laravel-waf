@@ -13,7 +13,13 @@ upstream provider → iptables/ipset → Nginx → Laravel WAF → application
 - Nginx: handles connection limits, request rates, timeouts, body/header limits, and cheap method/host rejection.
 - Laravel WAF: applies shared-cache request limits, emits challenge decisions,
   verifies ALTCHA responses when enabled, sends optional high-confidence
-  blocks to the agent, and records bounded metrics.
+  blocks to the agent, records bounded metrics, and can run the request rules
+  described in [`request-rules.md`](request-rules.md).
+
+Use the `laravel-waf` middleware alias (or `WafProtection::class`) for the
+complete package flow. It runs request inspection before DDoS rate limiting.
+Registering `WafProtection` and `DdosProtection` together applies the rate
+limiter twice.
 
 Laravel is not able to observe requests that Nginx or iptables reject. Monitor Nginx and host metrics alongside the Laravel WAF metrics.
 

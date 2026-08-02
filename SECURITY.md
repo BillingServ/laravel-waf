@@ -14,5 +14,8 @@ Include the affected version or commit, deployment assumptions, reproduction ste
 
 - The Laravel package must never require root privileges.
 - The agent must validate every decision, enforce expiration, and use argument arrays rather than a shell.
+- Request signatures are bounded and configurable; they are not a substitute for parameterized queries, output encoding, or safe file APIs.
+- GeoIP enforcement must use a trusted local database or an application-provided resolver; an unavailable resolver fails open unless explicitly configured otherwise.
 - Metrics must not contain unbounded or sensitive request data.
+- Notifications must never receive raw request bodies, query strings, credentials, or headers.
 - Upstream DDoS protection remains the responsibility of the hosting provider or network operator.

@@ -3,6 +3,7 @@
 namespace BillingServ\LaravelWaf\Support;
 
 use BillingServ\LaravelWaf\Contracts\MetricsSink;
+use BillingServ\LaravelWaf\Security\Finding;
 use Throwable;
 
 final class MetricsRecorder
@@ -24,6 +25,24 @@ final class MetricsRecorder
     {
         $this->increment('agent_blocks', [
             'outcome' => $outcome,
+        ]);
+    }
+
+    public function finding(Finding $finding, string $action): void
+    {
+        $this->increment('findings', [
+            'category' => $this->label($finding->category, 'unknown'),
+            'rule' => $this->label($finding->rule, 'unknown'),
+            'action' => $this->label($action, 'unknown'),
+            'route' => $this->routeLabel($finding->route),
+        ]);
+    }
+
+    public function notification(string $channel, string $outcome): void
+    {
+        $this->increment('notifications', [
+            'channel' => $this->label($channel, 'unknown'),
+            'outcome' => $this->label($outcome, 'unknown'),
         ]);
     }
 
@@ -54,8 +73,13 @@ final class MetricsRecorder
 
     private function routeLabel(string $route): string
     {
-        $route = preg_replace('/[^A-Za-z0-9_.:-]/', '_', $route) ?: 'unnamed';
+        return $this->label($route, 'unnamed', 64);
+    }
 
-        return substr($route, 0, 64);
+    private function label(string $value, string $fallback, int $length = 32): string
+    {
+        $value = preg_replace('/[^A-Za-z0-9_.:-]/', '_', $value) ?: $fallback;
+
+        return substr($value, 0, $length);
     }
 }

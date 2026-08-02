@@ -5,21 +5,41 @@ namespace BillingServ\LaravelWaf;
 use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
 use BillingServ\LaravelWaf\Contracts\ChallengeVerifier;
 use BillingServ\LaravelWaf\Contracts\DecisionSink;
+use BillingServ\LaravelWaf\Contracts\GeoIpResolver;
+use BillingServ\LaravelWaf\Contracts\InspectionRule;
 use BillingServ\LaravelWaf\Contracts\MetricsSink;
+use BillingServ\LaravelWaf\Contracts\NotificationSink;
+use BillingServ\LaravelWaf\Http\Middleware\LoginProtection;
 use BillingServ\LaravelWaf\Http\Middleware\DdosProtection;
+use BillingServ\LaravelWaf\Http\Middleware\RequestInspection;
+use BillingServ\LaravelWaf\Http\Middleware\WafProtection;
 use BillingServ\LaravelWaf\Http\Responses\AltchaChallengeResponder;
 use BillingServ\LaravelWaf\Http\Responses\DefaultChallengeResponder;
+use BillingServ\LaravelWaf\Security\LoginProtectionSubscriber;
+use BillingServ\LaravelWaf\Security\RequestInputCollector;
+use BillingServ\LaravelWaf\Security\RequestRuleEngine;
+use BillingServ\LaravelWaf\Security\Rules\GeoRule;
+use BillingServ\LaravelWaf\Security\Rules\LfiRule;
+use BillingServ\LaravelWaf\Security\Rules\RfiRule;
+use BillingServ\LaravelWaf\Security\Rules\SqlInjectionRule;
+use BillingServ\LaravelWaf\Security\Rules\XssRule;
 use BillingServ\LaravelWaf\Support\AltchaVerifier;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
+use BillingServ\LaravelWaf\Support\LaravelNotificationSink;
+use BillingServ\LaravelWaf\Support\MaxMindGeoIpResolver;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\NullChallengeVerifier;
 use BillingServ\LaravelWaf\Support\NullDecisionSink;
+use BillingServ\LaravelWaf\Support\NullGeoIpResolver;
 use BillingServ\LaravelWaf\Support\NullMetricsSink;
 use BillingServ\LaravelWaf\Support\PrometheusMetricsSink;
+use BillingServ\LaravelWaf\Support\SecurityNotifier;
 use BillingServ\LaravelWaf\Support\UnixSocketDecisionSink;
 use Illuminate\Cache\Repository;
-use Illuminate\Support\ServiceProvider;
 use Illuminate\Routing\Router;
+use Illuminate\Support\ServiceProvider;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 final class WafServiceProvider extends ServiceProvider
 {
@@ -28,6 +48,10 @@ final class WafServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/laravel-waf.php', 'laravel-waf');
 
         $this->app->singleton(Repository::class, fn ($app): Repository => $app->make('cache')->driver());
+
+        if (!$this->app->bound(LoggerInterface::class)) {
+            $this->app->singleton(LoggerInterface::class, static fn (): NullLogger => new NullLogger());
+        }
 
         $this->app->singleton(MetricsSink::class, function (): MetricsSink {
             if (!config('laravel-waf.metrics.enabled', false)
@@ -47,6 +71,59 @@ final class WafServiceProvider extends ServiceProvider
 
         $this->app->singleton(MetricsRecorder::class, fn ($app): MetricsRecorder => new MetricsRecorder(
             $app->make(MetricsSink::class),
+        ));
+
+        $this->app->singleton(RequestInputCollector::class, static fn (): RequestInputCollector => new RequestInputCollector());
+
+        $this->app->singleton(GeoIpResolver::class, static function (): GeoIpResolver {
+            $database = config('laravel-waf.geo.database');
+            $readerClass = 'GeoIp2\\Database\\Reader';
+
+            if (!is_string($database) || $database === '' || !is_file($database) || !class_exists($readerClass)) {
+                return new NullGeoIpResolver();
+            }
+
+            try {
+                return new MaxMindGeoIpResolver(new $readerClass($database));
+            } catch (\Throwable) {
+                return new NullGeoIpResolver();
+            }
+        });
+
+        $this->app->singleton(RequestRuleEngine::class, function ($app): RequestRuleEngine {
+            $inputs = $app->make(RequestInputCollector::class);
+            $rules = [];
+
+            $category = static fn (string $name): array => (array) config('laravel-waf.rules.categories.'.$name, []);
+            if ((bool) config('laravel-waf.rules.categories.xss.enabled', true)) {
+                $rules[] = new XssRule($inputs, $category('xss'));
+            }
+            if ((bool) config('laravel-waf.rules.categories.sqli.enabled', true)) {
+                $rules[] = new SqlInjectionRule($inputs, $category('sqli'));
+            }
+            if ((bool) config('laravel-waf.rules.categories.rfi.enabled', true)) {
+                $rules[] = new RfiRule($inputs, $category('rfi'));
+            }
+            if ((bool) config('laravel-waf.rules.categories.lfi.enabled', true)) {
+                $rules[] = new LfiRule($inputs, $category('lfi'));
+            }
+            if ((bool) config('laravel-waf.rules.categories.geo.enabled', false)) {
+                $rules[] = new GeoRule($app->make(GeoIpResolver::class));
+            }
+
+            /** @var array<int, InspectionRule> $rules */
+            return new RequestRuleEngine($rules);
+        });
+
+        $this->app->singleton(NotificationSink::class, fn ($app): NotificationSink => new LaravelNotificationSink(
+            $app,
+        ));
+
+        $this->app->singleton(SecurityNotifier::class, fn ($app): SecurityNotifier => new SecurityNotifier(
+            $app->make(Repository::class),
+            $app->make(NotificationSink::class),
+            $app->make(MetricsRecorder::class),
+            $app->make(LoggerInterface::class),
         ));
 
         $this->app->singleton(ChallengeTokenManager::class, function (): ChallengeTokenManager {
@@ -108,7 +185,15 @@ final class WafServiceProvider extends ServiceProvider
         ], 'laravel-waf-config');
 
         if ($this->app->bound('router')) {
-            $this->app->make(Router::class)->aliasMiddleware('laravel-waf.ddos', DdosProtection::class);
+            $router = $this->app->make(Router::class);
+            $router->aliasMiddleware('laravel-waf', WafProtection::class);
+            $router->aliasMiddleware('laravel-waf.inspect', RequestInspection::class);
+            $router->aliasMiddleware('laravel-waf.ddos', DdosProtection::class);
+            $router->aliasMiddleware('laravel-waf.login', LoginProtection::class);
+        }
+
+        if ($this->app->bound('events')) {
+            $this->app->make('events')->subscribe(LoginProtectionSubscriber::class);
         }
 
         if (config('laravel-waf.challenge.enabled', false)) {

@@ -32,6 +32,105 @@ return [
         'include_headers' => true,
     ],
 
+    'rules' => [
+        'enabled' => env('LARAVEL_WAF_RULES_ENABLED', true),
+        'mode' => env('LARAVEL_WAF_RULES_MODE', 'reject'), // reject|challenge|log
+        'status' => (int) env('LARAVEL_WAF_RULES_STATUS', 403),
+        'fail_mode' => env('LARAVEL_WAF_RULES_FAIL_MODE', 'open'), // open|closed
+        'max_findings' => (int) env('LARAVEL_WAF_RULES_MAX_FINDINGS', 3),
+        'skip_routes' => [
+            'laravel-waf.metrics',
+            'laravel-waf.challenge.verify',
+        ],
+        'input' => [
+            'path' => true,
+            'query' => true,
+            'body' => true,
+            'route' => true,
+            'headers' => false,
+            'cookies' => false,
+            'max_total_bytes' => (int) env('LARAVEL_WAF_RULES_MAX_INPUT_BYTES', 65536),
+            'max_value_bytes' => (int) env('LARAVEL_WAF_RULES_MAX_VALUE_BYTES', 8192),
+            'max_values' => (int) env('LARAVEL_WAF_RULES_MAX_VALUES', 256),
+            'max_depth' => (int) env('LARAVEL_WAF_RULES_MAX_DEPTH', 5),
+        ],
+        'categories' => [
+            'xss' => [
+                'enabled' => env('LARAVEL_WAF_XSS_ENABLED', true),
+                'action' => env('LARAVEL_WAF_XSS_ACTION'),
+                'exclude_fields' => [],
+            ],
+            'sqli' => [
+                'enabled' => env('LARAVEL_WAF_SQLI_ENABLED', true),
+                'action' => env('LARAVEL_WAF_SQLI_ACTION'),
+                'exclude_fields' => [],
+            ],
+            'rfi' => [
+                'enabled' => env('LARAVEL_WAF_RFI_ENABLED', true),
+                'action' => env('LARAVEL_WAF_RFI_ACTION'),
+                'exclude_fields' => [],
+                'remote_url_fields' => ['file', 'path', 'page', 'include', 'template', 'module', 'resource', 'url'],
+                'allowed_remote_hosts' => [],
+            ],
+            'lfi' => [
+                'enabled' => env('LARAVEL_WAF_LFI_ENABLED', true),
+                'action' => env('LARAVEL_WAF_LFI_ACTION'),
+                'exclude_fields' => [],
+            ],
+            'geo' => [
+                'enabled' => env('LARAVEL_WAF_GEO_ENABLED', false),
+                'action' => env('LARAVEL_WAF_GEO_ACTION'),
+            ],
+        ],
+    ],
+
+    'geo' => [
+        'database' => env('LARAVEL_WAF_GEOIP_DATABASE'),
+        'allowed_countries' => array_values(array_filter(array_map(
+            static fn (string $country): string => strtoupper(trim($country)),
+            explode(',', (string) env('LARAVEL_WAF_GEOIP_ALLOWED_COUNTRIES', '')),
+        ), static fn (string $country): bool => $country !== '')),
+        'denied_countries' => array_values(array_filter(array_map(
+            static fn (string $country): string => strtoupper(trim($country)),
+            explode(',', (string) env('LARAVEL_WAF_GEOIP_DENIED_COUNTRIES', '')),
+        ), static fn (string $country): bool => $country !== '')),
+        'unknown' => env('LARAVEL_WAF_GEOIP_UNKNOWN', 'allow'), // allow|reject
+    ],
+
+    'login' => [
+        'enabled' => env('LARAVEL_WAF_LOGIN_ENABLED', true),
+        'field' => env('LARAVEL_WAF_LOGIN_FIELD', 'email'),
+        'max_attempts' => (int) env('LARAVEL_WAF_LOGIN_MAX_ATTEMPTS', 5),
+        'decay_seconds' => (int) env('LARAVEL_WAF_LOGIN_DECAY_SECONDS', 300),
+        'status' => (int) env('LARAVEL_WAF_LOGIN_STATUS', 429),
+        'fail_mode' => env('LARAVEL_WAF_LOGIN_FAIL_MODE', 'open'), // open|closed
+        'block_after_attempts' => (int) env('LARAVEL_WAF_LOGIN_BLOCK_AFTER', 10),
+        'block_ttl_seconds' => (int) env('LARAVEL_WAF_LOGIN_BLOCK_TTL', 900),
+        'auto_block' => env('LARAVEL_WAF_LOGIN_AUTO_BLOCK', false),
+        'clear_on_login' => env('LARAVEL_WAF_LOGIN_CLEAR_ON_LOGIN', true),
+        'guards' => [],
+    ],
+
+    'notifications' => [
+        'enabled' => env('LARAVEL_WAF_NOTIFICATIONS_ENABLED', false),
+        'channels' => array_values(array_filter(array_map(
+            static fn (string $channel): string => strtolower(trim($channel)),
+            explode(',', (string) env('LARAVEL_WAF_NOTIFICATION_CHANNELS', 'email,slack')),
+        ), static fn (string $channel): bool => in_array($channel, ['email', 'slack'], true))),
+        'cooldown_seconds' => (int) env('LARAVEL_WAF_NOTIFICATION_COOLDOWN', 300),
+        'email' => [
+            'to' => array_values(array_filter(array_map(
+                static fn (string $recipient): string => trim($recipient),
+                explode(',', (string) env('LARAVEL_WAF_NOTIFICATION_EMAIL_TO', '')),
+            ), static fn (string $recipient): bool => filter_var($recipient, FILTER_VALIDATE_EMAIL) !== false)),
+            'subject' => env('LARAVEL_WAF_NOTIFICATION_EMAIL_SUBJECT', 'Laravel WAF security event'),
+        ],
+        'slack' => [
+            'webhook_url' => env('LARAVEL_WAF_NOTIFICATION_SLACK_WEBHOOK'),
+        ],
+        'timeout_seconds' => (int) env('LARAVEL_WAF_NOTIFICATION_TIMEOUT', 3),
+    ],
+
     'challenge' => [
         'enabled' => env('LARAVEL_WAF_CHALLENGE_ENABLED', false),
         'provider' => env('LARAVEL_WAF_CHALLENGE_PROVIDER', 'default'), // default|altcha
@@ -100,6 +199,7 @@ return [
         'block_ttl_seconds' => (int) env('LARAVEL_WAF_AGENT_BLOCK_TTL_SECONDS', 900),
         'block_cooldown_seconds' => (int) env('LARAVEL_WAF_AGENT_BLOCK_COOLDOWN_SECONDS', 60),
         'auto_block_on_limit' => env('LARAVEL_WAF_AGENT_AUTO_BLOCK', false),
+        'auto_block_on_finding' => env('LARAVEL_WAF_AGENT_AUTO_BLOCK_ON_FINDING', false),
     ],
 
     'metrics' => [

@@ -69,7 +69,9 @@ final class PrometheusMetricsSink implements MetricsSink
     {
         return match ($name) {
             'decisions' => 'Laravel WAF request decisions.',
+            'findings' => 'Laravel WAF request inspection findings.',
             'agent_blocks' => 'Laravel WAF host-agent block decisions.',
+            'notifications' => 'Laravel WAF security notification outcomes.',
             'errors' => 'Laravel WAF internal errors.',
             'evaluation_duration_seconds' => 'Laravel WAF middleware evaluation duration in seconds.',
             default => 'Laravel WAF metric.',

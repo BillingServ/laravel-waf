@@ -35,7 +35,10 @@ final class DdosProtection
 
         $route = $this->routeName($request);
         $challengeRoute = (string) config('laravel-waf.challenge.verify_route', 'laravel-waf.challenge.verify');
-        if ($route === $challengeRoute || in_array($route, config('laravel-waf.ddos.exempt_routes', []), true)) {
+        $blockedRoute = (string) config('laravel-waf.challenge.blocked_route', 'laravel-waf.blocked');
+        if ($route === $challengeRoute
+            || $route === $blockedRoute
+            || in_array($route, config('laravel-waf.ddos.exempt_routes', []), true)) {
             return $this->finish($next($request), $startedAt);
         }
 

@@ -104,6 +104,11 @@ final class AltchaChallengeResponder implements ChallengeResponder
             'X-Laravel-Waf-Blocked' => 'true',
         ];
 
+        $livewire = LivewireResponse::blocked($request, $headers);
+        if ($livewire !== null) {
+            return $livewire;
+        }
+
         if ($request->expectsJson()) {
             return new JsonResponse([
                 'message' => 'Request blocked.',

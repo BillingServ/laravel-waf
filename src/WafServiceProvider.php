@@ -236,6 +236,10 @@ final class WafServiceProvider extends ServiceProvider
             $this->app->make('events')->subscribe(LoginProtectionSubscriber::class);
         }
 
+        if (config('laravel-waf.enabled', true)) {
+            $this->loadRoutesFrom(__DIR__.'/../routes/blocked.php');
+        }
+
         if (config('laravel-waf.challenge.enabled', false)) {
             $this->loadRoutesFrom(__DIR__.'/../routes/challenge.php');
         }

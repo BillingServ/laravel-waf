@@ -28,6 +28,7 @@ return [
         'exempt_routes' => [
             'laravel-waf.metrics',
             'laravel-waf.challenge.verify',
+            'laravel-waf.blocked',
         ],
         'include_headers' => true,
     ],
@@ -41,6 +42,7 @@ return [
         'skip_routes' => [
             'laravel-waf.metrics',
             'laravel-waf.challenge.verify',
+            'laravel-waf.blocked',
         ],
         'input' => [
             'path' => true,
@@ -233,6 +235,8 @@ return [
         'favicon_url' => env('LARAVEL_WAF_CHALLENGE_FAVICON_URL'),
         'path' => env('LARAVEL_WAF_CHALLENGE_PATH', '_waf/challenge/verify'),
         'verify_route' => 'laravel-waf.challenge.verify',
+        'blocked_path' => env('LARAVEL_WAF_BLOCKED_PATH', '_waf/blocked'),
+        'blocked_route' => 'laravel-waf.blocked',
         'cookie_name' => env('LARAVEL_WAF_CHALLENGE_COOKIE', 'laravel_waf_challenge'),
         'cookie_secret' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SECRET'),
         'cookie_ttl_seconds' => (int) env('LARAVEL_WAF_CHALLENGE_COOKIE_TTL', 600),

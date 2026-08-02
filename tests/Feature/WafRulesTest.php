@@ -57,6 +57,50 @@ final class WafRulesTest extends TestCase
             ->assertStatus(403);
     }
 
+    public function test_livewire_sql_injection_redirects_to_the_top_level_blocked_page(): void
+    {
+        $snapshot = json_encode([
+            'data' => ['email' => '=1 UNION SELECT password FROM users'],
+            'memo' => ['id' => 'test-component', 'name' => 'login', 'children' => []],
+            'checksum' => 'test-checksum',
+        ], JSON_THROW_ON_ERROR);
+
+        $response = $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.55'])
+            ->withHeaders(['X-Livewire' => 'true'])
+            ->postJson('/inspect', [
+                'components' => [[
+                    'snapshot' => $snapshot,
+                    'updates' => [],
+                    'calls' => [],
+                ]],
+            ]);
+
+        $response->assertOk()
+            ->assertHeader('X-Laravel-Waf-Blocked', 'true')
+            ->assertJsonPath('components.0.effects.redirect', url('/_waf/blocked'));
+
+        $this->get('/_waf/blocked')
+            ->assertStatus(403)
+            ->assertHeader('X-Laravel-Waf-Blocked', 'true')
+            ->assertSee('Why have I been blocked?');
+
+        $serverMemo = [
+            'data' => ['email' => '=1 UNION SELECT password FROM users'],
+            'checksum' => 'test-checksum',
+        ];
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.56'])
+            ->withHeaders(['X-Livewire' => 'true'])
+            ->postJson('/inspect', [
+                'fingerprint' => ['id' => 'test-component', 'name' => 'login', 'locale' => 'en'],
+                'serverMemo' => $serverMemo,
+                'updates' => [],
+            ])
+            ->assertOk()
+            ->assertJsonPath('effects.redirect', url('/_waf/blocked'))
+            ->assertJsonPath('serverMemo.data.email', '=1 UNION SELECT password FROM users');
+    }
+
     public function test_rfi_is_blocked_for_a_file_like_parameter(): void
     {
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.42'])

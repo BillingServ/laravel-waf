@@ -126,3 +126,12 @@ token or verification cookie. It is intended for checking the blocked state
 of the page; normal challenge behavior is still exercised by exceeding the
 configured limit. Set `LARAVEL_WAF_CHALLENGE_THEME=dark` to force the dark
 theme, or leave it as `auto` to follow the visitor's system preference.
+
+## Livewire and Filament
+
+Livewire form submissions are handled as JSON requests. When request
+inspection blocks a Livewire update, the package returns Livewire's redirect
+response shape and navigates the browser to the dedicated blocked page at
+`/_waf/blocked` (configurable with `LARAVEL_WAF_BLOCKED_PATH`). This keeps the
+blocked page at a normal top-level URL instead of displaying the HTML response
+inside Livewire's error modal.

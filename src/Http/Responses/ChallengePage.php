@@ -85,8 +85,7 @@ final class ChallengePage
             .'<p>Return to the previous page and try again. If the problem continues, contact the site owner and include when this page appeared.</p>'
             .$retry
             .'</section>'
-            .'</div>'
-            .'<p class="blocked-footnote">For your protection, this request was not completed.</p>';
+            .'</div>';
 
         return self::document($title, 'blocked', $content);
     }
@@ -429,15 +428,6 @@ button:focus-visible, .secondary-action:focus-visible { outline: 3px solid rgba(
 
 .blocked-action:hover { color: var(--accent-hover); text-decoration: underline; }
 
-.blocked-footnote {
-    margin: 0;
-    padding: 18px 32px 22px;
-    border-top: 1px solid var(--border);
-    color: #98a2b3;
-    font-size: 12px;
-    text-align: center;
-}
-
 body.theme-dark {
     --background: #101828;
     --surface: #1d2939;
@@ -501,7 +491,6 @@ body.theme-dark button, body.theme-dark .secondary-action { color: #101828; }
     .blocked-grid { grid-template-columns: 1fr; }
     .blocked-section { padding: 24px; }
     .blocked-section + .blocked-section { border-top: 1px solid var(--border); border-left: 0; }
-    .blocked-footnote { padding-right: 24px; padding-left: 24px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

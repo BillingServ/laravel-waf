@@ -5,6 +5,7 @@ namespace BillingServ\LaravelWaf\Http\Middleware;
 use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
 use BillingServ\LaravelWaf\Contracts\DecisionSink;
 use BillingServ\LaravelWaf\Http\Responses\ChallengePage;
+use BillingServ\LaravelWaf\Http\Responses\LivewireResponse;
 use BillingServ\LaravelWaf\Security\BehaviorTracker;
 use BillingServ\LaravelWaf\Security\Finding;
 use BillingServ\LaravelWaf\Security\RequestRuleEngine;
@@ -147,6 +148,11 @@ final class RequestInspection
             'X-Laravel-Waf-Blocked' => 'true',
         ];
 
+        $livewire = LivewireResponse::blocked($request, $headers);
+        if ($livewire !== null) {
+            return $livewire;
+        }
+
         if ($request->expectsJson()) {
             return new JsonResponse(['message' => 'Request blocked.'], $status, $headers);
         }
@@ -200,6 +206,10 @@ final class RequestInspection
         $challengeRoute = config('laravel-waf.challenge.verify_route');
         if (is_string($challengeRoute) && $challengeRoute !== '') {
             $routes[] = $challengeRoute;
+        }
+        $blockedRoute = config('laravel-waf.challenge.blocked_route');
+        if (is_string($blockedRoute) && $blockedRoute !== '') {
+            $routes[] = $blockedRoute;
         }
 
         return is_array($routes) ? array_values(array_filter($routes, 'is_string')) : [];

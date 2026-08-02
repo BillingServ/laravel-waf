@@ -55,6 +55,10 @@ return [
             'max_depth' => (int) env('LARAVEL_WAF_RULES_MAX_DEPTH', 5),
         ],
         'categories' => [
+            'policy' => [
+                'enabled' => env('LARAVEL_WAF_POLICY_RULES_ENABLED', true),
+                'action' => env('LARAVEL_WAF_POLICY_ACTION'),
+            ],
             'xss' => [
                 'enabled' => env('LARAVEL_WAF_XSS_ENABLED', true),
                 'action' => env('LARAVEL_WAF_XSS_ACTION'),
@@ -81,7 +85,89 @@ return [
                 'enabled' => env('LARAVEL_WAF_GEO_ENABLED', false),
                 'action' => env('LARAVEL_WAF_GEO_ACTION'),
             ],
+            'command' => [
+                'enabled' => env('LARAVEL_WAF_COMMAND_ENABLED', true),
+                'action' => env('LARAVEL_WAF_COMMAND_ACTION'),
+                'exclude_fields' => [],
+            ],
+            'template' => [
+                'enabled' => env('LARAVEL_WAF_TEMPLATE_ENABLED', true),
+                'action' => env('LARAVEL_WAF_TEMPLATE_ACTION'),
+                'exclude_fields' => [],
+            ],
+            'nosqli' => [
+                'enabled' => env('LARAVEL_WAF_NOSQLI_ENABLED', true),
+                'action' => env('LARAVEL_WAF_NOSQLI_ACTION'),
+                'exclude_fields' => [],
+            ],
+            'ldap' => [
+                'enabled' => env('LARAVEL_WAF_LDAP_ENABLED', true),
+                'action' => env('LARAVEL_WAF_LDAP_ACTION'),
+                'exclude_fields' => [],
+            ],
+            'http' => [
+                'enabled' => env('LARAVEL_WAF_HTTP_ENABLED', true),
+                'action' => env('LARAVEL_WAF_HTTP_ACTION'),
+                'exclude_fields' => [],
+            ],
+            'ssrf' => [
+                'enabled' => env('LARAVEL_WAF_SSRF_ENABLED', true),
+                'action' => env('LARAVEL_WAF_SSRF_ACTION'),
+                'exclude_fields' => [],
+                'url_fields' => [
+                    'url', 'uri', 'endpoint', 'callback', 'webhook', 'redirect',
+                    'proxy', 'avatar', 'image', 'feed', 'source', 'host', 'domain',
+                ],
+                'allowed_hosts' => [],
+                'allow_private_ips' => false,
+            ],
         ],
+    ],
+
+    // Route names are the stable key for application-specific request policy.
+    // An empty map leaves this feature inactive even when the rule is enabled.
+    'policies' => [
+        'enabled' => env('LARAVEL_WAF_POLICIES_ENABLED', false),
+        'routes' => [],
+    ],
+
+    'behavior' => [
+        'enabled' => env('LARAVEL_WAF_BEHAVIOR_ENABLED', true),
+        'window_seconds' => (int) env('LARAVEL_WAF_BEHAVIOR_WINDOW_SECONDS', 60),
+        'thresholds' => [
+            '404' => (int) env('LARAVEL_WAF_BEHAVIOR_404_THRESHOLD', 30),
+            '405' => (int) env('LARAVEL_WAF_BEHAVIOR_405_THRESHOLD', 20),
+            '401' => (int) env('LARAVEL_WAF_BEHAVIOR_401_THRESHOLD', 20),
+            '403' => (int) env('LARAVEL_WAF_BEHAVIOR_403_THRESHOLD', 30),
+            'client_error' => (int) env('LARAVEL_WAF_BEHAVIOR_CLIENT_ERROR_THRESHOLD', 100),
+        ],
+        'action' => env('LARAVEL_WAF_BEHAVIOR_ACTION', 'challenge'),
+        'alert_cooldown_seconds' => (int) env('LARAVEL_WAF_BEHAVIOR_ALERT_COOLDOWN', 60),
+        'skip_routes' => [],
+    ],
+
+    'security_headers' => [
+        'enabled' => env('LARAVEL_WAF_SECURITY_HEADERS_ENABLED', true),
+        'x_content_type_options' => 'nosniff',
+        'x_frame_options' => env('LARAVEL_WAF_X_FRAME_OPTIONS', 'SAMEORIGIN'),
+        'referrer_policy' => env('LARAVEL_WAF_REFERRER_POLICY', 'strict-origin-when-cross-origin'),
+        'permissions_policy' => env('LARAVEL_WAF_PERMISSIONS_POLICY'),
+        'content_security_policy' => env('LARAVEL_WAF_CONTENT_SECURITY_POLICY'),
+        'hsts' => [
+            'enabled' => env('LARAVEL_WAF_HSTS_ENABLED', false),
+            'max_age' => (int) env('LARAVEL_WAF_HSTS_MAX_AGE', 31536000),
+            'include_subdomains' => env('LARAVEL_WAF_HSTS_INCLUDE_SUBDOMAINS', false),
+            'preload' => env('LARAVEL_WAF_HSTS_PRELOAD', false),
+        ],
+    ],
+
+    // This guard is available to outbound HTTP integrations. It is not
+    // applied to every Laravel HTTP client call automatically.
+    'outbound' => [
+        'allowed_schemes' => ['http', 'https'],
+        'allowed_hosts' => [],
+        'allow_private_ips' => false,
+        'resolve_dns' => false,
     ],
 
     'geo' => [

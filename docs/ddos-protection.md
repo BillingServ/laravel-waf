@@ -1,6 +1,6 @@
 # DDoS protection scope
 
-The first Laravel WAF slice uses layered controls:
+The Laravel WAF uses layered controls:
 
 ```text
 upstream provider → iptables/ipset → Nginx → Laravel WAF → application

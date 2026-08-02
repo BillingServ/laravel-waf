@@ -45,4 +45,14 @@ final class RateLimitKey
     {
         return 'laravel-waf:notification:'.hash('sha256', $fingerprint);
     }
+
+    public static function behavior(string $ip, string $kind): string
+    {
+        return 'laravel-waf:behavior:'.hash('sha256', $ip.'|'.$kind);
+    }
+
+    public static function behaviorAlert(string $ip, string $kind): string
+    {
+        return 'laravel-waf:behavior-alert:'.hash('sha256', $ip.'|'.$kind);
+    }
 }

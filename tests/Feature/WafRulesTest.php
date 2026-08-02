@@ -7,6 +7,8 @@ use BillingServ\LaravelWaf\Contracts\NotificationSink;
 use BillingServ\LaravelWaf\Http\Middleware\LoginProtection;
 use BillingServ\LaravelWaf\Http\Middleware\WafProtection;
 use BillingServ\LaravelWaf\Security\Finding;
+use BillingServ\LaravelWaf\Security\RequestInputCollector;
+use BillingServ\LaravelWaf\Security\Rules\CrLfRule;
 use BillingServ\LaravelWaf\Support\SecurityNotifier;
 use BillingServ\LaravelWaf\Tests\TestCase;
 use Illuminate\Auth\Events\Failed;
@@ -66,6 +68,56 @@ final class WafRulesTest extends TestCase
     {
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.43'])
             ->get('/inspect?file=..%2F..%2Fetc%2Fpasswd')
+            ->assertStatus(403);
+    }
+
+    public function test_command_injection_is_blocked(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.49'])
+            ->get('/inspect?command=%24%28id%29')
+            ->assertStatus(403);
+    }
+
+    public function test_template_injection_is_blocked(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.50'])
+            ->get('/inspect?value=%7B%7B7%2A7%7D%7D')
+            ->assertStatus(403);
+    }
+
+    public function test_nosql_operator_in_a_field_is_blocked(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.51'])
+            ->get('/inspect?filter%5B%24ne%5D=1')
+            ->assertStatus(403);
+    }
+
+    public function test_ldap_filter_injection_is_blocked(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.52'])
+            ->get('/inspect?filter=%28%7C%28uid%3D%2A%29%28uid%3D%2A%29%29')
+            ->assertStatus(403);
+    }
+
+    public function test_crlf_injection_is_blocked(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.53'])
+            ->postJson('/inspect', ['next' => "safe\r\nX-Test: bad"])
+            ->assertStatus(403);
+    }
+
+    public function test_crlf_rule_matches_a_decoded_value(): void
+    {
+        $request = Request::create('/inspect?next=%0d%0aX-Test%3A%20bad');
+        $finding = (new CrLfRule(new RequestInputCollector()))->inspect($request);
+
+        self::assertNotNull($finding);
+    }
+
+    public function test_ssrf_to_a_loopback_address_is_blocked(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.54'])
+            ->get('/inspect?url=http%3A%2F%2F127.0.0.1%2Fadmin')
             ->assertStatus(403);
     }
 

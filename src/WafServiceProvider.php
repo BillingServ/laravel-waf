@@ -15,13 +15,21 @@ use BillingServ\LaravelWaf\Http\Middleware\RequestInspection;
 use BillingServ\LaravelWaf\Http\Middleware\WafProtection;
 use BillingServ\LaravelWaf\Http\Responses\AltchaChallengeResponder;
 use BillingServ\LaravelWaf\Http\Responses\DefaultChallengeResponder;
+use BillingServ\LaravelWaf\Security\BehaviorTracker;
 use BillingServ\LaravelWaf\Security\LoginProtectionSubscriber;
 use BillingServ\LaravelWaf\Security\RequestInputCollector;
 use BillingServ\LaravelWaf\Security\RequestRuleEngine;
+use BillingServ\LaravelWaf\Security\Rules\CommandInjectionRule;
+use BillingServ\LaravelWaf\Security\Rules\CrLfRule;
 use BillingServ\LaravelWaf\Security\Rules\GeoRule;
+use BillingServ\LaravelWaf\Security\Rules\LdapInjectionRule;
 use BillingServ\LaravelWaf\Security\Rules\LfiRule;
+use BillingServ\LaravelWaf\Security\Rules\NoSqlInjectionRule;
 use BillingServ\LaravelWaf\Security\Rules\RfiRule;
+use BillingServ\LaravelWaf\Security\Rules\RoutePolicyRule;
 use BillingServ\LaravelWaf\Security\Rules\SqlInjectionRule;
+use BillingServ\LaravelWaf\Security\Rules\SsrfRule;
+use BillingServ\LaravelWaf\Security\Rules\TemplateInjectionRule;
 use BillingServ\LaravelWaf\Security\Rules\XssRule;
 use BillingServ\LaravelWaf\Support\AltchaVerifier;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
@@ -32,9 +40,12 @@ use BillingServ\LaravelWaf\Support\NullChallengeVerifier;
 use BillingServ\LaravelWaf\Support\NullDecisionSink;
 use BillingServ\LaravelWaf\Support\NullGeoIpResolver;
 use BillingServ\LaravelWaf\Support\NullMetricsSink;
+use BillingServ\LaravelWaf\Support\OutboundUrlGuard;
 use BillingServ\LaravelWaf\Support\PrometheusMetricsSink;
+use BillingServ\LaravelWaf\Support\SecurityHeaders;
 use BillingServ\LaravelWaf\Support\SecurityNotifier;
 use BillingServ\LaravelWaf\Support\UnixSocketDecisionSink;
+use Illuminate\Cache\RateLimiter;
 use Illuminate\Cache\Repository;
 use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
@@ -75,6 +86,14 @@ final class WafServiceProvider extends ServiceProvider
 
         $this->app->singleton(RequestInputCollector::class, static fn (): RequestInputCollector => new RequestInputCollector());
 
+        $this->app->singleton(BehaviorTracker::class, fn ($app): BehaviorTracker => new BehaviorTracker(
+            $app->make(RateLimiter::class),
+            $app->make(MetricsRecorder::class),
+        ));
+
+        $this->app->singleton(SecurityHeaders::class, static fn (): SecurityHeaders => new SecurityHeaders());
+        $this->app->singleton(OutboundUrlGuard::class, static fn (): OutboundUrlGuard => new OutboundUrlGuard());
+
         $this->app->singleton(GeoIpResolver::class, static function (): GeoIpResolver {
             $database = config('laravel-waf.geo.database');
             $readerClass = 'GeoIp2\\Database\\Reader';
@@ -95,6 +114,9 @@ final class WafServiceProvider extends ServiceProvider
             $rules = [];
 
             $category = static fn (string $name): array => (array) config('laravel-waf.rules.categories.'.$name, []);
+            if ((bool) config('laravel-waf.rules.categories.policy.enabled', true)) {
+                $rules[] = new RoutePolicyRule();
+            }
             if ((bool) config('laravel-waf.rules.categories.xss.enabled', true)) {
                 $rules[] = new XssRule($inputs, $category('xss'));
             }
@@ -106,6 +128,24 @@ final class WafServiceProvider extends ServiceProvider
             }
             if ((bool) config('laravel-waf.rules.categories.lfi.enabled', true)) {
                 $rules[] = new LfiRule($inputs, $category('lfi'));
+            }
+            if ((bool) config('laravel-waf.rules.categories.command.enabled', true)) {
+                $rules[] = new CommandInjectionRule($inputs, $category('command'));
+            }
+            if ((bool) config('laravel-waf.rules.categories.template.enabled', true)) {
+                $rules[] = new TemplateInjectionRule($inputs, $category('template'));
+            }
+            if ((bool) config('laravel-waf.rules.categories.nosqli.enabled', true)) {
+                $rules[] = new NoSqlInjectionRule($inputs, $category('nosqli'));
+            }
+            if ((bool) config('laravel-waf.rules.categories.ldap.enabled', true)) {
+                $rules[] = new LdapInjectionRule($inputs, $category('ldap'));
+            }
+            if ((bool) config('laravel-waf.rules.categories.http.enabled', true)) {
+                $rules[] = new CrLfRule($inputs, $category('http'));
+            }
+            if ((bool) config('laravel-waf.rules.categories.ssrf.enabled', true)) {
+                $rules[] = new SsrfRule($inputs, $category('ssrf'));
             }
             if ((bool) config('laravel-waf.rules.categories.geo.enabled', false)) {
                 $rules[] = new GeoRule($app->make(GeoIpResolver::class));

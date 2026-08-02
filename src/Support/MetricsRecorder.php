@@ -46,6 +46,15 @@ final class MetricsRecorder
         ]);
     }
 
+    public function behavior(string $kind, string $outcome, string $route): void
+    {
+        $this->increment('behavior_events', [
+            'kind' => $this->label($kind, 'unknown'),
+            'outcome' => $this->label($outcome, 'unknown'),
+            'route' => $this->routeLabel($route),
+        ]);
+    }
+
     public function error(string $component): void
     {
         $this->increment('errors', [

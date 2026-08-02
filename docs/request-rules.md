@@ -6,11 +6,18 @@ is managed elsewhere.
 
 The built-in categories are:
 
+- `policy`: method, body size, content type, and route middleware checks for named routes;
 - `xss`: script elements, event handlers, executable schemes, and dangerous HTML elements;
 - `sqli`: common tautologies, union and stacked queries, time-delay functions, database probes, and SQL comments;
 - `rfi`: dangerous stream wrappers and remote URLs in file-like parameters;
 - `lfi`: traversal, null bytes, sensitive local files, and file wrappers;
-- `geo`: country allow/deny policy through a resolver.
+- `command`: shell substitution, common command names after shell operators, and process execution functions;
+- `template`: common server-side template expressions and object traversal markers;
+- `nosqli`: common Mongo-style query operators and expressions;
+- `ldap`: LDAP filter operators and wildcard filters;
+- `http`: CRLF characters after limited URL and entity decoding;
+- `ssrf`: unsafe URL schemes and literal loopback, private, reserved, and metadata hosts;
+- `geo`: country allow and deny policy through a resolver.
 
 Input is collected from the path, query string, parsed body, and route
 parameters by default. Headers and cookies are opt-in. Values, total bytes,
@@ -52,6 +59,54 @@ Exclusions are configured in the published file:
 Exclusions reduce protection and should be as narrow as possible. These
 signatures are a detection layer, not a replacement for parameterized queries,
 output encoding, or safe filesystem APIs.
+
+## Route policies
+
+Route policies are disabled until explicitly enabled. They use route names so
+they continue to work when URL prefixes change:
+
+```php
+'policies' => [
+    'enabled' => true,
+    'routes' => [
+        'admin.export' => [
+            'methods' => ['POST'],
+            'content_types' => ['application/json'],
+            'max_body_bytes' => 1048576,
+            'require_auth' => true,
+            'required_middleware' => ['auth', 'throttle'],
+        ],
+    ],
+],
+```
+
+`require_auth` checks that authentication middleware is attached to the route.
+It does not replace Laravel authentication or authorization. Use Gates and
+Policies for the user's permission to perform the action.
+
+## SSRF protection
+
+The inbound SSRF rule checks URL-like fields without resolving
+attacker-controlled hostnames. This avoids adding DNS lookups to every
+request, but it cannot identify a public hostname that later resolves to a
+private address.
+
+For code that makes outbound requests from user-controlled URLs, use the
+provided guard explicitly:
+
+```php
+use BillingServ\LaravelWaf\Support\OutboundUrlGuard;
+
+public function fetch(OutboundUrlGuard $urls, string $target): Response
+{
+    $urls->assertAllowed($target);
+
+    // Make the request with the application's HTTP client here.
+}
+```
+
+The guard is not applied to every Laravel HTTP client call automatically. An
+allowlist is recommended for integrations with a known set of remote hosts.
 
 ## GeoIP
 

@@ -4,6 +4,7 @@ namespace BillingServ\LaravelWaf\Http\Middleware;
 
 use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
 use BillingServ\LaravelWaf\Contracts\DecisionSink;
+use BillingServ\LaravelWaf\Security\BehaviorTracker;
 use BillingServ\LaravelWaf\Security\Finding;
 use BillingServ\LaravelWaf\Security\RequestRuleEngine;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
@@ -21,6 +22,7 @@ final class RequestInspection
 {
     public function __construct(
         private readonly RequestRuleEngine $engine,
+        private readonly BehaviorTracker $behavior,
         private readonly RateLimiter $limiter,
         private readonly DecisionSink $decisions,
         private readonly ChallengeResponder $challenge,
@@ -32,7 +34,7 @@ final class RequestInspection
 
     public function handle(Request $request, Closure $next): Response
     {
-        if (!config('laravel-waf.enabled', true) || !config('laravel-waf.rules.enabled', true)) {
+        if (!config('laravel-waf.enabled', true)) {
             return $next($request);
         }
 
@@ -41,20 +43,27 @@ final class RequestInspection
             return $next($request);
         }
 
-        try {
-            $findings = $this->engine->inspect($request);
-        } catch (Throwable $exception) {
-            $this->metrics->error('request_inspection');
-            $this->warning('Laravel WAF request inspection failed.', [
-                'exception' => $exception::class,
-                'route' => $route,
-            ]);
+        $findings = [];
+        $behaviorFinding = $this->behavior->inspect($request);
+        if ($behaviorFinding !== null) {
+            $findings[] = $behaviorFinding;
+        }
 
-            if (config('laravel-waf.rules.fail_mode', 'open') === 'closed') {
-                return $this->unavailable($request);
+        if (config('laravel-waf.rules.enabled', true)) {
+            try {
+                $findings = array_merge($findings, $this->engine->inspect($request));
+                $findings = array_slice($findings, 0, max(1, min(32, (int) config('laravel-waf.rules.max_findings', 3))));
+            } catch (Throwable $exception) {
+                $this->metrics->error('request_inspection');
+                $this->warning('Laravel WAF request inspection failed.', [
+                    'exception' => $exception::class,
+                    'route' => $route,
+                ]);
+
+                if (config('laravel-waf.rules.fail_mode', 'open') === 'closed') {
+                    return $this->unavailable($request);
+                }
             }
-
-            return $next($request);
         }
 
         $actionable = null;
@@ -71,7 +80,10 @@ final class RequestInspection
         }
 
         if ($actionable === null) {
-            return $next($request);
+            $response = $next($request);
+            $this->behavior->record($request, $response);
+
+            return $response;
         }
 
         /** @var array{0: Finding, 1: string} $actionable */
@@ -89,7 +101,9 @@ final class RequestInspection
 
     private function action(Finding $finding): string
     {
-        $configured = config('laravel-waf.rules.categories.'.$finding->category.'.action');
+        $configured = $finding->category === 'behavior'
+            ? config('laravel-waf.behavior.action')
+            : config('laravel-waf.rules.categories.'.$finding->category.'.action');
         $action = is_string($configured) && $configured !== ''
             ? $configured
             : config('laravel-waf.rules.mode', 'reject');

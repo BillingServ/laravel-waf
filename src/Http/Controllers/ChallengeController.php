@@ -1,0 +1,170 @@
+<?php
+
+namespace BillingServ\LaravelWaf\Http\Controllers;
+
+use BillingServ\LaravelWaf\Contracts\ChallengeVerifier;
+use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
+use BillingServ\LaravelWaf\Support\MetricsRecorder;
+use BillingServ\LaravelWaf\Support\RateLimitKey;
+use Illuminate\Cache\Repository;
+use Illuminate\Cache\RateLimiter;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Cookie;
+use Symfony\Component\HttpFoundation\RedirectResponse;
+use Symfony\Component\HttpFoundation\Response;
+use Throwable;
+
+final class ChallengeController
+{
+    public function __construct(
+        private readonly RateLimiter $limiter,
+        private readonly Repository $cache,
+        private readonly ChallengeVerifier $verifier,
+        private readonly ChallengeTokenManager $tokens,
+        private readonly MetricsRecorder $metrics,
+    ) {
+    }
+
+    public function verify(Request $request): Response
+    {
+        $ip = $request->ip() ?: 'unknown';
+        $maxAttempts = max(1, (int) config('laravel-waf.challenge.max_attempts', 10));
+        $decaySeconds = max(1, (int) config('laravel-waf.challenge.decay_seconds', 60));
+        $key = RateLimitKey::challenge($ip);
+
+        try {
+            if ($this->limiter->tooManyAttempts($key, $maxAttempts)) {
+                $this->metrics->decision('challenge_rate_limited', 'challenge', 'challenge');
+
+                return $this->rateLimited($request, max(1, $this->limiter->availableIn($key)));
+            }
+
+            $this->limiter->hit($key, $decaySeconds);
+        } catch (Throwable) {
+            $this->metrics->error('challenge_rate_limiter');
+
+            return $this->unavailable($request);
+        }
+
+        $field = $this->field();
+        $payload = $request->input($field);
+        $requestToken = $request->input('_waf_challenge');
+        $returnTo = is_string($requestToken)
+            ? $this->tokens->requestReturnTo($requestToken, $ip)
+            : null;
+
+        if ($returnTo === null || ! $this->verifier->verify($payload)) {
+            $this->metrics->decision('challenge_rejected', 'challenge', 'challenge');
+
+            return $this->rejected($request);
+        }
+
+        try {
+            $consumed = $this->cache->add(
+                RateLimitKey::challengeToken((string) $requestToken),
+                true,
+                max(1, (int) config('laravel-waf.challenge.request_token_ttl_seconds', 600)),
+            );
+
+            $payloadKey = is_string($payload)
+                ? $payload
+                : json_encode($payload, JSON_THROW_ON_ERROR);
+            $replayFree = $this->cache->add(
+                RateLimitKey::challengePayload((string) $payloadKey),
+                true,
+                max(1, (int) config('laravel-waf.challenge.replay_ttl_seconds', 600)),
+            );
+
+            if (! $consumed || ! $replayFree) {
+                $this->metrics->decision('challenge_replay', 'challenge', 'challenge');
+
+                return $this->rejected($request);
+            }
+        } catch (Throwable) {
+            $this->metrics->error('challenge_replay_store');
+
+            return $this->unavailable($request);
+        }
+
+        $passTtl = max(1, min(86400, (int) config('laravel-waf.challenge.cookie_ttl_seconds', 600)));
+        $pass = $this->tokens->issuePass($ip, $passTtl);
+        if ($pass === null) {
+            $this->metrics->error('challenge_cookie');
+
+            return $this->unavailable($request);
+        }
+
+        $response = new RedirectResponse($returnTo, 303);
+        $response->headers->setCookie($this->cookie($pass, $passTtl));
+        $this->metrics->decision('challenge_passed', 'challenge', 'challenge');
+
+        return $response;
+    }
+
+    private function field(): string
+    {
+        $field = config('laravel-waf.challenge.altcha.field', 'altcha');
+
+        return is_string($field) && preg_match('/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/', $field) === 1
+            ? $field
+            : 'altcha';
+    }
+
+    private function cookie(string $value, int $ttl): Cookie
+    {
+        $name = config('laravel-waf.challenge.cookie_name', 'laravel_waf_challenge');
+        $name = is_string($name) && preg_match('/^[A-Za-z0-9_\-]+$/', $name) === 1
+            ? $name
+            : 'laravel_waf_challenge';
+        $sameSite = strtolower((string) config('laravel-waf.challenge.cookie_same_site', 'lax'));
+        $sameSite = in_array($sameSite, ['lax', 'strict', 'none'], true) ? $sameSite : 'lax';
+        $secure = filter_var(config('laravel-waf.challenge.cookie_secure', true), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        $secure = $secure ?? true;
+
+        if ($sameSite === 'none') {
+            $secure = true;
+        }
+
+        return new Cookie($name, $value, time() + $ttl, '/', null, $secure, true, false, $sameSite);
+    }
+
+    private function rateLimited(Request $request, int $retryAfter): Response
+    {
+        $headers = [
+            'Cache-Control' => 'no-store',
+            'Retry-After' => (string) $retryAfter,
+        ];
+
+        if ($request->expectsJson()) {
+            return new JsonResponse(['message' => 'Too Many Requests'], 429, $headers);
+        }
+
+        return new Response('Too Many Requests', 429, $headers);
+    }
+
+    private function rejected(Request $request): Response
+    {
+        $headers = ['Cache-Control' => 'no-store'];
+
+        if ($request->expectsJson()) {
+            return new JsonResponse(['message' => 'Challenge verification failed.'], 422, $headers);
+        }
+
+        return new Response('Challenge verification failed.', 422, $headers);
+    }
+
+    private function unavailable(Request $request): Response
+    {
+        $headers = [
+            'Cache-Control' => 'no-store',
+            'Retry-After' => '5',
+        ];
+
+        if ($request->expectsJson()) {
+            return new JsonResponse(['message' => 'Challenge verification is temporarily unavailable.'], 503, $headers);
+        }
+
+        return new Response('Challenge verification is temporarily unavailable.', 503, $headers);
+    }
+}

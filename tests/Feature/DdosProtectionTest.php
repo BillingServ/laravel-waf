@@ -61,4 +61,74 @@ final class DdosProtectionTest extends TestCase
             ->assertHeader('X-Laravel-Waf-Challenge', 'required')
             ->assertSee('Additional verification required');
     }
+
+    public function test_altcha_challenge_can_be_completed_and_returns_a_bounded_pass(): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.challenge.provider', 'altcha');
+        config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost/altcha/challenge');
+        config()->set('laravel-waf.challenge.altcha.hmac_key', 'test-altcha-secret');
+
+        $server = ['REMOTE_ADDR' => '203.0.113.20'];
+        $this->withServerVariables($server)->get('/limited');
+        $this->withServerVariables($server)->get('/limited');
+        $challenge = $this->withServerVariables($server)->get('/limited');
+
+        $challenge->assertStatus(429)
+            ->assertSee('altcha-widget')
+            ->assertSee('/_waf/challenge/verify');
+
+        preg_match('/name="_waf_challenge" value="([^"]+)"/', $challenge->getContent(), $matches);
+        self::assertNotEmpty($matches[1] ?? null);
+
+        $verification = $this->withServerVariables($server)->post('/_waf/challenge/verify', [
+            '_waf_challenge' => $matches[1],
+            'altcha' => $this->validAltchaPayload(),
+        ]);
+
+        $verification->assertRedirect('/limited')->assertStatus(303);
+        $cookies = $verification->baseResponse->headers->getCookies();
+        self::assertCount(1, $cookies);
+
+        $this->withUnencryptedCookie($cookies[0]->getName(), $cookies[0]->getValue())
+            ->withServerVariables($server)
+            ->get('/limited')
+            ->assertOk();
+
+        $this->withServerVariables($server)->post('/_waf/challenge/verify', [
+            '_waf_challenge' => $matches[1],
+            'altcha' => $this->validAltchaPayload(),
+        ])->assertStatus(422);
+    }
+
+    private function validAltchaPayload(): string
+    {
+        $altchaClass = class_exists('AltchaOrg\\Altcha\\V1\\Altcha')
+            ? 'AltchaOrg\\Altcha\\V1\\Altcha'
+            : 'AltchaOrg\\Altcha\\Altcha';
+        $optionsClass = class_exists('AltchaOrg\\Altcha\\V1\\ChallengeOptions')
+            ? 'AltchaOrg\\Altcha\\V1\\ChallengeOptions'
+            : 'AltchaOrg\\Altcha\\ChallengeOptions';
+        $algorithmClass = class_exists('AltchaOrg\\Altcha\\V1\\Hasher\\Algorithm')
+            ? 'AltchaOrg\\Altcha\\V1\\Hasher\\Algorithm'
+            : 'AltchaOrg\\Altcha\\Hasher\\Algorithm';
+        $altcha = new $altchaClass('test-altcha-secret');
+        $challenge = $altcha->createChallenge(new $optionsClass(maxNumber: 1));
+        $solution = $altcha->solveChallenge(
+            $challenge->challenge,
+            $challenge->salt,
+            $algorithmClass::from($challenge->algorithm),
+            $challenge->maxNumber,
+        );
+
+        self::assertNotNull($solution);
+
+        return base64_encode(json_encode([
+            'algorithm' => $challenge->algorithm,
+            'challenge' => $challenge->challenge,
+            'number' => $solution->number,
+            'salt' => $challenge->salt,
+            'signature' => $challenge->signature,
+        ], JSON_THROW_ON_ERROR));
+    }
 }

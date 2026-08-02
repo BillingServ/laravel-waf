@@ -16,7 +16,7 @@ The first implementation focuses on:
 
 - application request-rate limiting;
 - route-aware limits without inspecting request bodies;
-- an extension point for challenge providers;
+- challenge mode with a complete ALTCHA verification flow;
 - optional, expiring IP block decisions for `laravel-waf-agent`;
 - Prometheus-compatible decision and latency metrics;
 - Nginx and iptables/ipset deployment guidance.
@@ -29,6 +29,10 @@ XSS, SQL injection, RFI, LFI, geo rules, login protection, notifications, and XD
 composer require billingserv/laravel-waf
 php artisan vendor:publish --tag=laravel-waf-config
 ```
+
+ALTCHA support is included. The package accepts both the legacy ALTCHA
+payload format used by existing bsv211 deployments and the current ALTCHA
+PHP library format. See [`docs/challenge.md`](docs/challenge.md).
 
 Add the middleware to the application's global middleware stack. The exact registration depends on the Laravel version:
 

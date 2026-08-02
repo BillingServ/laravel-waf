@@ -4,6 +4,7 @@ namespace BillingServ\LaravelWaf\Http\Middleware;
 
 use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
 use BillingServ\LaravelWaf\Contracts\DecisionSink;
+use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
 use Closure;
@@ -19,6 +20,7 @@ final class DdosProtection
         private readonly RateLimiter $limiter,
         private readonly DecisionSink $decisions,
         private readonly ChallengeResponder $challenge,
+        private readonly ChallengeTokenManager $challengeTokens,
         private readonly MetricsRecorder $metrics,
     ) {
     }
@@ -32,12 +34,18 @@ final class DdosProtection
         }
 
         $route = $this->routeName($request);
-        if (in_array($route, config('laravel-waf.ddos.exempt_routes', []), true)) {
+        $challengeRoute = (string) config('laravel-waf.challenge.verify_route', 'laravel-waf.challenge.verify');
+        if ($route === $challengeRoute || in_array($route, config('laravel-waf.ddos.exempt_routes', []), true)) {
             return $this->finish($next($request), $startedAt);
         }
 
         $ip = $request->ip() ?: 'unknown';
-        $rules = $this->rules($route);
+        $challengePassed = config('laravel-waf.challenge.enabled', false)
+            && $this->challengeTokens->isPassed(
+                $request->cookie((string) config('laravel-waf.challenge.cookie_name', 'laravel_waf_challenge')),
+                $ip,
+            );
+        $rules = $this->rules($route, $challengePassed);
         $violation = null;
         $remaining = PHP_INT_MAX;
         $limit = PHP_INT_MAX;
@@ -72,12 +80,16 @@ final class DdosProtection
 
         if ($violation !== null) {
             $mode = config('laravel-waf.ddos.mode', 'reject');
-            $action = $mode === 'challenge' && config('laravel-waf.challenge.enabled', false)
+            $action = ! $challengePassed
+                && $mode === 'challenge'
+                && config('laravel-waf.challenge.enabled', false)
                 ? 'challenge'
                 : 'rate_limited';
 
             $this->metrics->decision($action, $violation['scope'], $route);
-            $this->maybeBlock($ip);
+            if (! $challengePassed) {
+                $this->maybeBlock($ip);
+            }
 
             if ($action === 'challenge') {
                 return $this->finish(
@@ -116,11 +128,15 @@ final class DdosProtection
     }
 
     /** @return array<int, array{scope: string, max_attempts: int, decay_seconds: int}> */
-    private function rules(string $route): array
+    private function rules(string $route, bool $challengePassed = false): array
     {
         $rules = [];
-        $global = config('laravel-waf.ddos.global', []);
-        $routeRules = config('laravel-waf.ddos.routes', []);
+        $global = $challengePassed
+            ? config('laravel-waf.challenge.passed.global', [])
+            : config('laravel-waf.ddos.global', []);
+        $routeRules = $challengePassed
+            ? config('laravel-waf.challenge.passed.routes', [])
+            : config('laravel-waf.ddos.routes', []);
         $routeRule = $routeRules[$route] ?? $routeRules['*'] ?? null;
 
         foreach ([['global', $global], ['route', $routeRule]] as [$scope, $rule]) {

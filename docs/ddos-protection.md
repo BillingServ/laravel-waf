@@ -11,7 +11,9 @@ upstream provider → iptables/ipset → Nginx → Laravel WAF → application
 - Upstream provider: protects the network link and upstream routing from volumetric attacks.
 - iptables/ipset: drops already-known abusive sources before Nginx. The optional agent only updates expiring sets; administrators own the firewall rules.
 - Nginx: handles connection limits, request rates, timeouts, body/header limits, and cheap method/host rejection.
-- Laravel WAF: applies shared-cache request limits, emits challenge decisions, sends optional high-confidence blocks to the agent, and records bounded metrics.
+- Laravel WAF: applies shared-cache request limits, emits challenge decisions,
+  verifies ALTCHA responses when enabled, sends optional high-confidence
+  blocks to the agent, and records bounded metrics.
 
 Laravel is not able to observe requests that Nginx or iptables reject. Monitor Nginx and host metrics alongside the Laravel WAF metrics.
 
@@ -29,3 +31,7 @@ The agent and automatic host blocks are disabled by default. Enable them only af
 4. TTLs, metrics, and an unblock procedure have been tested.
 
 Do not send every rate-limited request to the agent. The Laravel middleware has a cooldown so a single source produces at most one block decision per cooldown window.
+
+Challenge mode has its own per-IP verification limit and a bounded post-
+verification limit. A successful challenge is therefore a temporary change in
+traffic policy, not an unlimited allowlist.

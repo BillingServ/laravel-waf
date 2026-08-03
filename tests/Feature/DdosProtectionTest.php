@@ -62,12 +62,25 @@ final class DdosProtectionTest extends TestCase
             ->assertSee('Additional verification required');
     }
 
+    public function test_challenge_cookie_is_excluded_from_laravel_cookie_encryption(): void
+    {
+        $middlewareClass = 'Illuminate\\Cookie\\Middleware\\EncryptCookies';
+        if (!class_exists($middlewareClass)) {
+            self::markTestSkipped('Laravel cookie middleware is not installed.');
+        }
+
+        $middleware = new $middlewareClass(app('encrypter'));
+
+        self::assertTrue($middleware->isDisabled('laravel_waf_challenge'));
+    }
+
     public function test_altcha_challenge_can_be_completed_and_returns_a_bounded_pass(): void
     {
         config()->set('laravel-waf.ddos.mode', 'challenge');
         config()->set('laravel-waf.challenge.provider', 'altcha');
         config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost/altcha/challenge');
         config()->set('laravel-waf.challenge.altcha.hmac_key', 'test-altcha-secret');
+        config()->set('laravel-waf.challenge.cookie_secure', 'auto');
 
         $server = ['REMOTE_ADDR' => '203.0.113.20'];
         $this->withServerVariables($server)->get('/limited');
@@ -89,6 +102,7 @@ final class DdosProtectionTest extends TestCase
         $verification->assertRedirect('/limited')->assertStatus(303);
         $cookies = $verification->baseResponse->headers->getCookies();
         self::assertCount(1, $cookies);
+        self::assertFalse($cookies[0]->isSecure());
 
         $this->withUnencryptedCookie($cookies[0]->getName(), $cookies[0]->getValue())
             ->withServerVariables($server)

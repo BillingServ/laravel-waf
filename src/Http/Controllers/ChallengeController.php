@@ -97,7 +97,7 @@ final class ChallengeController
         }
 
         $response = new RedirectResponse($returnTo, 303);
-        $response->headers->setCookie($this->cookie($pass, $passTtl));
+        $response->headers->setCookie($this->cookie($pass, $passTtl, $request));
         $this->metrics->decision('challenge_passed', 'challenge', 'challenge');
 
         return $response;
@@ -135,7 +135,7 @@ final class ChallengeController
             : 'altcha';
     }
 
-    private function cookie(string $value, int $ttl): Cookie
+    private function cookie(string $value, int $ttl, Request $request): Cookie
     {
         $name = config('laravel-waf.challenge.cookie_name', 'laravel_waf_challenge');
         $name = is_string($name) && preg_match('/^[A-Za-z0-9_\-]+$/', $name) === 1
@@ -143,8 +143,8 @@ final class ChallengeController
             : 'laravel_waf_challenge';
         $sameSite = strtolower((string) config('laravel-waf.challenge.cookie_same_site', 'lax'));
         $sameSite = in_array($sameSite, ['lax', 'strict', 'none'], true) ? $sameSite : 'lax';
-        $secure = filter_var(config('laravel-waf.challenge.cookie_secure', true), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
-        $secure = $secure ?? true;
+        $secure = filter_var(config('laravel-waf.challenge.cookie_secure', 'auto'), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        $secure = $secure ?? $request->isSecure();
 
         if ($sameSite === 'none') {
             $secure = true;

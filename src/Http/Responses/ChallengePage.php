@@ -302,17 +302,25 @@ form { margin-top: 26px; }
 
 .widget-shell {
     display: flex;
+    width: 100%;
     min-height: 65px;
     align-items: center;
     justify-content: center;
-    padding: 10px 12px;
+    padding: 14px 16px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: #fcfcfd;
-    text-align: left;
+    overflow: hidden;
+    text-align: center;
 }
 
-altcha-widget { display: block; width: 100%; }
+altcha-widget {
+    display: block;
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    margin: 0;
+}
 
 button, .secondary-action {
     display: inline-flex;

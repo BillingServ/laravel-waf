@@ -39,6 +39,7 @@ LARAVEL_WAF_CHALLENGE_BRAND_NAME=Example
 LARAVEL_WAF_CHALLENGE_LOGO_URL=/assets/logo.svg
 LARAVEL_WAF_CHALLENGE_FAVICON_URL=/favicon.ico
 LARAVEL_WAF_CHALLENGE_THEME=auto
+LARAVEL_WAF_CHALLENGE_COOKIE_SECURE=auto
 ```
 
 `LARAVEL_WAF_ALTCHA_CHALLENGE_ATTRIBUTE` may be `challengeurl` for the
@@ -50,6 +51,14 @@ The interstitial is white-labeled by default and does not display the package
 name. Set the optional challenge brand, logo, and favicon variables when the
 site should identify itself on the page. Logo and favicon URLs may be
 same-origin paths or HTTPS URLs.
+
+`LARAVEL_WAF_CHALLENGE_COOKIE_SECURE=auto` marks the pass cookie as secure when
+the current request is HTTPS and leaves it usable for local HTTP development.
+Use `true` when HTTPS is mandatory in every environment.
+
+The WAF pass cookie is a signed token rather than a Laravel application cookie.
+The package excludes it from `EncryptCookies` so globally registered WAF
+middleware can read it before the web middleware stack runs.
 
 ## Server signatures
 

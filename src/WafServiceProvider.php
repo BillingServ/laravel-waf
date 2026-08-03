@@ -224,6 +224,8 @@ final class WafServiceProvider extends ServiceProvider
             __DIR__.'/../config/laravel-waf.php' => config_path('laravel-waf.php'),
         ], 'laravel-waf-config');
 
+        $this->excludeChallengeCookieFromEncryption();
+
         if ($this->app->bound('router')) {
             $router = $this->app->make(Router::class);
             $router->aliasMiddleware('laravel-waf', WafProtection::class);
@@ -246,6 +248,19 @@ final class WafServiceProvider extends ServiceProvider
 
         if (config('laravel-waf.metrics.enabled', false)) {
             $this->loadRoutesFrom(__DIR__.'/../routes/metrics.php');
+        }
+    }
+
+    private function excludeChallengeCookieFromEncryption(): void
+    {
+        $name = config('laravel-waf.challenge.cookie_name', 'laravel_waf_challenge');
+        if (!is_string($name) || preg_match('/^[A-Za-z0-9_\-]+$/', $name) !== 1) {
+            return;
+        }
+
+        $middleware = 'Illuminate\\Cookie\\Middleware\\EncryptCookies';
+        if (class_exists($middleware) && method_exists($middleware, 'except')) {
+            $middleware::except($name);
         }
     }
 }

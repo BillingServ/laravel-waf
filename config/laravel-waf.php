@@ -240,7 +240,7 @@ return [
         'cookie_name' => env('LARAVEL_WAF_CHALLENGE_COOKIE', 'laravel_waf_challenge'),
         'cookie_secret' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SECRET'),
         'cookie_ttl_seconds' => (int) env('LARAVEL_WAF_CHALLENGE_COOKIE_TTL', 600),
-        'cookie_secure' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SECURE', true),
+        'cookie_secure' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SECURE', 'auto'), // true|false|auto
         'cookie_same_site' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SAME_SITE', 'lax'),
         'request_token_ttl_seconds' => (int) env('LARAVEL_WAF_CHALLENGE_TOKEN_TTL', 600),
         'max_attempts' => (int) env('LARAVEL_WAF_CHALLENGE_MAX_ATTEMPTS', 10),

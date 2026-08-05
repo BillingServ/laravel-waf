@@ -2,6 +2,7 @@
 
 namespace BillingServ\LaravelWaf\Tests\Feature;
 
+use BillingServ\LaravelWaf\Contracts\ChallengeVerifier;
 use BillingServ\LaravelWaf\Contracts\GeoIpResolver;
 use BillingServ\LaravelWaf\Contracts\NotificationSink;
 use BillingServ\LaravelWaf\Http\Middleware\LoginProtection;
@@ -9,6 +10,7 @@ use BillingServ\LaravelWaf\Http\Middleware\WafProtection;
 use BillingServ\LaravelWaf\Security\Finding;
 use BillingServ\LaravelWaf\Security\RequestInputCollector;
 use BillingServ\LaravelWaf\Security\Rules\CrLfRule;
+use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\SecurityNotifier;
 use BillingServ\LaravelWaf\Tests\TestCase;
 use Illuminate\Auth\Events\Failed;
@@ -199,6 +201,56 @@ final class WafRulesTest extends TestCase
             ->get('/inspect?name=%3Cscript%3E')
             ->assertStatus(429)
             ->assertHeader('X-Laravel-Waf-Challenge', 'required');
+    }
+
+    public function test_completed_rule_challenge_allows_the_original_request(): void
+    {
+        config()->set('laravel-waf.rules.categories.xss.action', 'challenge');
+        config()->set('laravel-waf.challenge.provider', 'altcha');
+        config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost/altcha/challenge');
+        $this->app->instance(ChallengeVerifier::class, new class implements ChallengeVerifier {
+            public function verify(mixed $payload): bool
+            {
+                return $payload === 'valid-payload';
+            }
+        });
+
+        $server = ['REMOTE_ADDR' => '203.0.113.57'];
+        $challenge = $this->withServerVariables($server)
+            ->get('/inspect?name=%3Cscript%3E');
+
+        $challenge->assertStatus(429)
+            ->assertHeader('X-Laravel-Waf-Challenge', 'required');
+        preg_match('/name="_waf_challenge" value="([^"]+)"/', $challenge->getContent(), $matches);
+        self::assertNotEmpty($matches[1] ?? null);
+
+        $verification = $this->withServerVariables($server)->post('/_waf/challenge/verify', [
+            '_waf_challenge' => $matches[1],
+            'altcha' => 'valid-payload',
+        ]);
+
+        $verification->assertRedirect('/inspect?name=%3Cscript%3E')->assertStatus(303);
+        $cookies = $verification->baseResponse->headers->getCookies();
+        self::assertCount(1, $cookies);
+
+        $this->withUnencryptedCookie($cookies[0]->getName(), $cookies[0]->getValue())
+            ->withServerVariables($server)
+            ->get('/inspect?name=%3Cscript%3E')
+            ->assertOk()
+            ->assertContent('ok');
+    }
+
+    public function test_completed_challenge_does_not_bypass_reject_rules(): void
+    {
+        $ip = '203.0.113.58';
+        $pass = app(ChallengeTokenManager::class)->issuePass($ip, 600);
+        self::assertNotNull($pass);
+
+        $this->withUnencryptedCookie('laravel_waf_challenge', $pass)
+            ->withServerVariables(['REMOTE_ADDR' => $ip])
+            ->get('/inspect?name=%3Cscript%3E')
+            ->assertStatus(403)
+            ->assertHeader('X-Laravel-Waf-Blocked', 'true');
     }
 
     public function test_notifications_receive_redacted_findings(): void

@@ -9,6 +9,7 @@ use BillingServ\LaravelWaf\Http\Responses\LivewireResponse;
 use BillingServ\LaravelWaf\Security\BehaviorTracker;
 use BillingServ\LaravelWaf\Security\Finding;
 use BillingServ\LaravelWaf\Security\RequestRuleEngine;
+use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Support\SecurityNotifier;
@@ -28,6 +29,7 @@ final class RequestInspection
         private readonly RateLimiter $limiter,
         private readonly DecisionSink $decisions,
         private readonly ChallengeResponder $challenge,
+        private readonly ChallengeTokenManager $challengeTokens,
         private readonly MetricsRecorder $metrics,
         private readonly SecurityNotifier $notifier,
         private readonly LoggerInterface $logger,
@@ -44,6 +46,13 @@ final class RequestInspection
         if (in_array($route, $this->skipRoutes(), true)) {
             return $next($request);
         }
+
+        $ip = $request->ip() ?: 'unknown';
+        $challengePassed = config('laravel-waf.challenge.enabled', false)
+            && $this->challengeTokens->isPassed(
+                $request->cookie((string) config('laravel-waf.challenge.cookie_name', 'laravel_waf_challenge')),
+                $ip,
+            );
 
         $findings = [];
         $behaviorFinding = $this->behavior->inspect($request);
@@ -76,7 +85,9 @@ final class RequestInspection
             $this->notifier->notify($finding);
             $this->maybeBlock($finding);
 
-            if ($action !== 'log' && $actionable === null) {
+            if ($action !== 'log'
+                && !($action === 'challenge' && $challengePassed)
+                && $actionable === null) {
                 $actionable = [$finding, $action];
             }
         }

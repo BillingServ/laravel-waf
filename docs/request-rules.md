@@ -10,7 +10,8 @@ The built-in categories are:
 - `xss`: script elements, event handlers, executable schemes, and dangerous HTML elements;
 - `sqli`: common tautologies, union and stacked queries, time-delay functions, database probes, and SQL comments;
 - `rfi`: dangerous stream wrappers and remote URLs in file-like parameters;
-- `lfi`: traversal, null bytes, sensitive local files, and file wrappers;
+- `lfi`: hidden URL path segments, traversal, null bytes, sensitive local files,
+  and file wrappers. The root `/.well-known/` namespace remains available;
 - `command`: shell substitution, common command names after shell operators, and process execution functions;
 - `template`: common server-side template expressions and object traversal markers;
 - `nosqli`: common Mongo-style query operators and expressions;

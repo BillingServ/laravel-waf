@@ -27,6 +27,7 @@ use BillingServ\LaravelWaf\Security\Rules\LfiRule;
 use BillingServ\LaravelWaf\Security\Rules\NoSqlInjectionRule;
 use BillingServ\LaravelWaf\Security\Rules\RfiRule;
 use BillingServ\LaravelWaf\Security\Rules\RoutePolicyRule;
+use BillingServ\LaravelWaf\Security\Rules\SensitivePathRule;
 use BillingServ\LaravelWaf\Security\Rules\SqlInjectionRule;
 use BillingServ\LaravelWaf\Security\Rules\SsrfRule;
 use BillingServ\LaravelWaf\Security\Rules\TemplateInjectionRule;
@@ -127,6 +128,7 @@ final class WafServiceProvider extends ServiceProvider
                 $rules[] = new RfiRule($inputs, $category('rfi'));
             }
             if ((bool) config('laravel-waf.rules.categories.lfi.enabled', true)) {
+                $rules[] = new SensitivePathRule();
                 $rules[] = new LfiRule($inputs, $category('lfi'));
             }
             if ((bool) config('laravel-waf.rules.categories.command.enabled', true)) {

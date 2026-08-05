@@ -10,6 +10,7 @@ use BillingServ\LaravelWaf\Http\Middleware\WafProtection;
 use BillingServ\LaravelWaf\Security\Finding;
 use BillingServ\LaravelWaf\Security\RequestInputCollector;
 use BillingServ\LaravelWaf\Security\Rules\CrLfRule;
+use BillingServ\LaravelWaf\Security\Rules\SensitivePathRule;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\SecurityNotifier;
 use BillingServ\LaravelWaf\Tests\TestCase;
@@ -34,6 +35,20 @@ final class WafRulesTest extends TestCase
         Route::middleware(WafProtection::class)
             ->match(['GET', 'POST'], '/inspect', static fn () => response('ok'))
             ->name('inspect');
+
+        foreach (['.env', '.git/config', 'nested/.htaccess'] as $index => $path) {
+            Route::middleware(WafProtection::class)
+                ->get('/'.$path, static fn () => response('sensitive'))
+                ->name('sensitive-dotfile-'.$index);
+        }
+
+        Route::middleware(WafProtection::class)
+            ->get('/.well-known/acme-challenge/test-token', static fn () => response('challenge-token'))
+            ->name('well-known');
+
+        Route::middleware(WafProtection::class)
+            ->get('/assets/app.css', static fn () => response('stylesheet'))
+            ->name('dotted-filename');
 
         Route::middleware(LoginProtection::class)
             ->post('/login', static function (Request $request) {
@@ -115,6 +130,44 @@ final class WafRulesTest extends TestCase
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.43'])
             ->get('/inspect?file=..%2F..%2Fetc%2Fpasswd')
             ->assertStatus(403);
+    }
+
+    public function test_sensitive_dotfile_paths_are_blocked(): void
+    {
+        foreach (['/.env', '/.git/config', '/nested/.htaccess'] as $path) {
+            $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.59'])
+                ->get($path)
+                ->assertStatus(403)
+                ->assertHeader('X-Laravel-Waf-Blocked', 'true');
+        }
+    }
+
+    public function test_well_known_and_ordinary_dotted_paths_remain_available(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.60'])
+            ->get('/.well-known/acme-challenge/test-token')
+            ->assertOk()
+            ->assertContent('challenge-token');
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.60'])
+            ->get('/assets/app.css')
+            ->assertOk()
+            ->assertContent('stylesheet');
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.60'])
+            ->get('/inspect?filename=.env')
+            ->assertOk()
+            ->assertContent('ok');
+    }
+
+    public function test_encoded_sensitive_dotfile_paths_are_detected(): void
+    {
+        foreach (['/%2eenv', '/%252eenv', '/.well-known/%252eenv'] as $path) {
+            $finding = (new SensitivePathRule())->inspect(Request::create($path));
+
+            self::assertNotNull($finding);
+            self::assertSame('sensitive_dotfile', $finding->rule);
+        }
     }
 
     public function test_command_injection_is_blocked(): void

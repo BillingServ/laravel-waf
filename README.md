@@ -25,6 +25,8 @@ upstream provider → iptables/ipset → Nginx → Laravel WAF → application
 - Adds standard response security headers without replacing headers set by the application.
 - Provides an opt-in outbound URL guard for integrations that accept remote URLs.
 - Includes an optional Linux agent for signed, expiring IP block decisions sent over a Unix socket.
+- Supports an opt-in Nginx/Go pre-application gate that detects traffic pressure
+  and delegates browser challenges to Laravel.
 
 These controls operate at the Laravel application layer. They complement
 parameterized database queries, output encoding, secure file handling, Nginx
@@ -37,17 +39,25 @@ composer require billingserv/laravel-waf
 php artisan vendor:publish --tag=laravel-waf-config
 ```
 
-Register the unified middleware globally:
+Register the unified middleware at the start of the `web` and `api` groups so
+Laravel route names are available to route-aware limits and metrics:
 
 ```php
 // bootstrap/app.php (Laravel 11+)
 ->withMiddleware(function (Middleware $middleware): void {
-    $middleware->append(\BillingServ\LaravelWaf\Http\Middleware\WafProtection::class);
+    $middleware->web(prepend: [
+        \BillingServ\LaravelWaf\Http\Middleware\WafProtection::class,
+    ]);
+    $middleware->api(prepend: [
+        \BillingServ\LaravelWaf\Http\Middleware\WafProtection::class,
+    ]);
 })
 ```
 
-For applications using `app/Http/Kernel.php`, append the same class to the
-global `$middleware` stack. `WafProtection` includes request inspection and
+For applications using `app/Http/Kernel.php`, prepend the same class to the
+`web` and `api` middleware groups. Global registration remains supported, but
+requests may be labelled `unnamed` because global middleware can run before
+Laravel resolves the route. `WafProtection` includes request inspection and
 DDoS rate limiting; do not register `DdosProtection` alongside it.
 
 The package uses Laravel's configured cache/rate-limiter store. Use Redis or
@@ -61,6 +71,7 @@ another shared store when running multiple PHP workers or application servers.
 - [`docs/challenge.md`](docs/challenge.md): ALTCHA configuration and challenge testing.
 - [`docs/ddos-protection.md`](docs/ddos-protection.md): application rate limiting and layered deployment.
 - [`docs/nginx-ddos.md`](docs/nginx-ddos.md): Nginx, iptables, and ipset guidance.
+- [`docs/agent-gate.md`](docs/agent-gate.md): coordinated Nginx, Go-agent, and Laravel browser challenges.
 - [`docs/laravel-security.md`](docs/laravel-security.md): Laravel security controls and OWASP coverage.
 
 ## Nginx and host protection

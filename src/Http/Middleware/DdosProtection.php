@@ -5,6 +5,7 @@ namespace BillingServ\LaravelWaf\Http\Middleware;
 use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
 use BillingServ\LaravelWaf\Contracts\DecisionSink;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
+use BillingServ\LaravelWaf\Support\InternalEndpoint;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
 use Closure;
@@ -36,7 +37,8 @@ final class DdosProtection
         $route = $this->routeName($request);
         $challengeRoute = (string) config('laravel-waf.challenge.verify_route', 'laravel-waf.challenge.verify');
         $blockedRoute = (string) config('laravel-waf.challenge.blocked_route', 'laravel-waf.blocked');
-        if ($route === $challengeRoute
+        if (InternalEndpoint::matches($request)
+            || $route === $challengeRoute
             || $route === $blockedRoute
             || in_array($route, config('laravel-waf.ddos.exempt_routes', []), true)) {
             return $this->finish($next($request), $startedAt);
@@ -58,6 +60,32 @@ final class DdosProtection
                 $request->cookie((string) config('laravel-waf.challenge.cookie_name', 'laravel_waf_challenge')),
                 $ip,
             );
+
+        $agentGateRetryAfter = $this->agentGateRetryAfter($request, $challengePassed);
+        if ($agentGateRetryAfter === 0) {
+            $this->metrics->error('agent_gate_marker');
+
+            return $this->finish($this->protectionUnavailable(), $startedAt);
+        }
+        if ($agentGateRetryAfter !== null) {
+            $this->metrics->decision('challenge', 'agent_gate', $route);
+
+            return $this->finish(
+                $this->challenge->respond($request, $agentGateRetryAfter, 'agent_gate'),
+                $startedAt,
+            );
+        }
+
+        $adaptiveRetryAfter = $this->adaptiveRetryAfter($challengePassed);
+        if ($adaptiveRetryAfter !== null) {
+            $this->metrics->decision('challenge', 'adaptive', $route);
+
+            return $this->finish(
+                $this->challenge->respond($request, $adaptiveRetryAfter, 'adaptive'),
+                $startedAt,
+            );
+        }
+
         $rules = $this->rules($route, $challengePassed);
         $violation = null;
         $remaining = PHP_INT_MAX;
@@ -170,6 +198,61 @@ final class DdosProtection
         }
 
         return $rules;
+    }
+
+    private function adaptiveRetryAfter(bool $challengePassed): ?int
+    {
+        if (!config('laravel-waf.ddos.adaptive.enabled', false)
+            || config('laravel-waf.ddos.mode', 'reject') !== 'challenge'
+            || !config('laravel-waf.challenge.enabled', false)) {
+            return null;
+        }
+
+        $challengeAfter = max(1, (int) config('laravel-waf.ddos.adaptive.challenge_after', 600));
+        $windowSeconds = max(1, min(3600, (int) config('laravel-waf.ddos.adaptive.window_seconds', 60)));
+        $key = RateLimitKey::trafficPressure();
+
+        try {
+            $this->limiter->hit($key, $windowSeconds);
+            if ($challengePassed || $this->limiter->attempts($key) <= $challengeAfter) {
+                return null;
+            }
+
+            return max(1, $this->limiter->availableIn($key));
+        } catch (Throwable) {
+            $this->metrics->error('adaptive_rate_limiter');
+
+            return null;
+        }
+    }
+
+    private function agentGateRetryAfter(Request $request, bool $challengePassed): ?int
+    {
+        if ($challengePassed || !config('laravel-waf.agent.gate.enabled', false)) {
+            return null;
+        }
+
+        $header = config('laravel-waf.agent.gate.header', 'X-Laravel-Waf-Gate');
+        if (!is_string($header) || preg_match('/^[A-Za-z0-9-]{1,64}$/', $header) !== 1) {
+            return 0;
+        }
+
+        $provided = $request->headers->get($header);
+        if ($provided === null || $provided === '') {
+            return null;
+        }
+
+        $token = config('laravel-waf.agent.gate.token');
+        if (!is_string($token)
+            || strlen($token) < 32
+            || strlen($token) > 256
+            || config('laravel-waf.ddos.mode', 'reject') !== 'challenge'
+            || !config('laravel-waf.challenge.enabled', false)
+            || !hash_equals($token, $provided)) {
+            return 0;
+        }
+
+        return max(1, min(3600, (int) config('laravel-waf.agent.gate.retry_after_seconds', 60)));
     }
 
     private function maybeBlock(string $ip): void

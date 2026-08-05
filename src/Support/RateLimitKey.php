@@ -31,6 +31,11 @@ final class RateLimitKey
         return 'laravel-waf:challenge-payload:'.hash('sha256', $payload);
     }
 
+    public static function trafficPressure(): string
+    {
+        return 'laravel-waf:traffic-pressure';
+    }
+
     public static function login(string $ip, string $identifier = ''): string
     {
         return 'laravel-waf:login:'.hash('sha256', $ip.'|'.strtolower(trim($identifier)));

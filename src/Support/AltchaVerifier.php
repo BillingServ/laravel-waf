@@ -61,9 +61,45 @@ final class AltchaVerifier implements ChallengeVerifier
         $class = class_exists('AltchaOrg\\Altcha\\V1\\Altcha')
             ? 'AltchaOrg\\Altcha\\V1\\Altcha'
             : Altcha::class;
-        $altcha = new $class($this->hmacKey);
 
-        return $altcha->verifySolution($payload, true);
+        try {
+            $altcha = new $class($this->hmacKey);
+            if ($altcha->verifySolution($payload, true)) {
+                return true;
+            }
+        } catch (Throwable) {
+            // The installed ALTCHA API may not support legacy solution payloads.
+        }
+
+        return $this->verifyLegacySolution($data);
+    }
+
+    /** @param array<string, mixed>|null $data */
+    private function verifyLegacySolution(?array $data): bool
+    {
+        if (($data['algorithm'] ?? null) !== 'SHA-256'
+            || !is_string($data['challenge'] ?? null)
+            || preg_match('/^[a-f0-9]{64}$/', $data['challenge']) !== 1
+            || !is_int($data['number'] ?? null)
+            || $data['number'] < 0
+            || $data['number'] > 1000000
+            || !is_string($data['salt'] ?? null)
+            || preg_match('/^[a-f0-9]{16,128}\\?expires=([0-9]{10})$/', $data['salt'], $matches) !== 1
+            || !is_string($data['signature'] ?? null)
+            || preg_match('/^[a-f0-9]{64}$/', $data['signature']) !== 1) {
+            return false;
+        }
+
+        $expiresAt = (int) $matches[1];
+        if ($expiresAt < time() || $expiresAt > time() + 900) {
+            return false;
+        }
+
+        $expectedChallenge = hash('sha256', $data['salt'].$data['number']);
+        $expectedSignature = hash_hmac('sha256', $data['challenge'], $this->hmacKey);
+
+        return hash_equals($expectedChallenge, $data['challenge'])
+            && hash_equals($expectedSignature, $data['signature']);
     }
 
     private function verifyServerSignature(string|array $payload): bool

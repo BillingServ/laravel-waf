@@ -60,7 +60,7 @@ final class AltchaChallengeResponder implements ChallengeResponder
         }
 
         $widget = $this->widget($challengeUrl, $field);
-        $script = $this->script();
+        $script = $this->script().$this->autoSubmitScript();
 
         $body = ChallengePage::required($this->title, $this->message, $verifyUrl, $token, $widget, $script);
 
@@ -137,10 +137,10 @@ final class AltchaChallengeResponder implements ChallengeResponder
             'name' => $field,
         ];
 
-        $auto = config('laravel-waf.challenge.altcha.auto', 'onsubmit');
-        if (is_string($auto) && $auto !== '') {
-            $attributes['auto'] = $auto;
-        }
+        $auto = strtolower((string) config('laravel-waf.challenge.altcha.auto', 'onsubmit'));
+        $attributes['auto'] = in_array($auto, ['off', 'onfocus', 'onload', 'onsubmit'], true)
+            ? $auto
+            : 'onsubmit';
 
         if ((bool) config('laravel-waf.challenge.altcha.hide_logo', true)) {
             $attributes['hidelogo'] = null;
@@ -176,6 +176,43 @@ final class AltchaChallengeResponder implements ChallengeResponder
         }
 
         return '<script'.$attributes.'></script>';
+    }
+
+    private function autoSubmitScript(): string
+    {
+        if (!config('laravel-waf.challenge.altcha.auto_submit', false)) {
+            return '';
+        }
+
+        $field = json_encode(
+            $this->field(),
+            JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_THROW_ON_ERROR,
+        );
+
+        return '<script>window.addEventListener("load",function(){'
+            .'var widget=document.querySelector("altcha-widget");'
+            .'var form=widget&&widget.closest("form");'
+            .'if(!widget||!form){return;}'
+            .'var fieldName='.$field.';'
+            .'var submitted=false;'
+            .'var storePayload=function(payload){'
+            .'if(payload===undefined||payload===null||payload===""){return false;}'
+            .'var value=typeof payload==="string"?payload:JSON.stringify(payload);'
+            .'var input=form.querySelector("input[data-laravel-waf-altcha-payload]");'
+            .'if(!input){input=document.createElement("input");input.type="hidden";'
+            .'input.name=fieldName;input.setAttribute("data-laravel-waf-altcha-payload","");'
+            .'form.appendChild(input);}'
+            .'input.value=value;return true;'
+            .'};'
+            .'var submit=function(payload){if(submitted||!storePayload(payload)){return;}'
+            .'submitted=true;setTimeout(function(){form.submit();},0);};'
+            .'widget.addEventListener("statechange",function(event){'
+            .'if(event.detail&&event.detail.state==="verified"){submit(event.detail.payload);}'
+            .'});'
+            .'widget.addEventListener("verified",function(event){'
+            .'if(event.detail){submit(event.detail.payload);}'
+            .'});'
+            .'});</script>';
     }
 
     private function verifyUrl(): ?string

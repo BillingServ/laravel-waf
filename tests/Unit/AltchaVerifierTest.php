@@ -54,4 +54,42 @@ final class AltchaVerifierTest extends TestCase
 
         self::assertTrue((new AltchaVerifier($secret, 'server_signature'))->verify($payload));
     }
+
+    public function test_legacy_hosted_solution_payload_is_verified(): void
+    {
+        $secret = 'test-legacy-secret';
+        $salt = '0123456789abcdef0123456789abcdef?expires='.(time() + 300);
+        $number = 12345;
+        $challenge = hash('sha256', $salt.$number);
+        $payload = base64_encode(json_encode([
+            'algorithm' => 'SHA-256',
+            'challenge' => $challenge,
+            'number' => $number,
+            'salt' => $salt,
+            'signature' => hash_hmac('sha256', $challenge, $secret),
+        ], JSON_THROW_ON_ERROR));
+
+        self::assertTrue((new AltchaVerifier($secret))->verify($payload));
+    }
+
+    public function test_legacy_payload_rejects_expiry_parameter_splicing(): void
+    {
+        $secret = 'test-legacy-secret';
+        $expiresAt = time() + 300;
+        $salt = '0123456789abcdef0123456789abcdef?expires='.$expiresAt;
+        $number = 12345;
+        $challenge = hash('sha256', $salt.$number);
+        $splicedSalt = '0123456789abcdef0123456789abcdef?expires='.$expiresAt.'1';
+        self::assertSame($challenge, hash('sha256', $splicedSalt.'2345'));
+
+        $payload = base64_encode(json_encode([
+            'algorithm' => 'SHA-256',
+            'challenge' => $challenge,
+            'number' => 2345,
+            'salt' => $splicedSalt,
+            'signature' => hash_hmac('sha256', $challenge, $secret),
+        ], JSON_THROW_ON_ERROR));
+
+        self::assertFalse((new AltchaVerifier($secret))->verify($payload));
+    }
 }

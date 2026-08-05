@@ -31,6 +31,15 @@ return [
             'laravel-waf.blocked',
         ],
         'include_headers' => true,
+
+        // Optional site-wide traffic pressure mode. Once the shared request
+        // count crosses this threshold, unverified browsers receive the
+        // configured challenge while verified browsers continue normally.
+        'adaptive' => [
+            'enabled' => env('LARAVEL_WAF_ADAPTIVE_ENABLED', false),
+            'challenge_after' => (int) env('LARAVEL_WAF_ADAPTIVE_CHALLENGE_AFTER', 600),
+            'window_seconds' => (int) env('LARAVEL_WAF_ADAPTIVE_WINDOW_SECONDS', 60),
+        ],
     ],
 
     'rules' => [
@@ -222,8 +231,8 @@ return [
     'challenge' => [
         'enabled' => env('LARAVEL_WAF_CHALLENGE_ENABLED', false),
         'provider' => env('LARAVEL_WAF_CHALLENGE_PROVIDER', 'default'), // default|altcha
-        'title' => 'Additional verification required',
-        'message' => 'Please complete the verification before continuing.',
+        'title' => env('LARAVEL_WAF_CHALLENGE_TITLE', 'Additional verification required'),
+        'message' => env('LARAVEL_WAF_CHALLENGE_MESSAGE', 'Please complete the verification before continuing.'),
         'failure_title' => 'Verification failed',
         'failure_message' => 'We could not confirm this request. Please try again.',
         'blocked_title' => 'Request blocked',
@@ -278,6 +287,7 @@ return [
             'script_integrity' => env('LARAVEL_WAF_ALTCHA_SCRIPT_INTEGRITY'),
             'hide_logo' => env('LARAVEL_WAF_ALTCHA_HIDE_LOGO', true),
             'auto' => env('LARAVEL_WAF_ALTCHA_AUTO', 'onsubmit'),
+            'auto_submit' => env('LARAVEL_WAF_ALTCHA_AUTO_SUBMIT', false),
             'display' => env('LARAVEL_WAF_ALTCHA_DISPLAY'),
         ],
     ],
@@ -299,6 +309,16 @@ return [
         'block_cooldown_seconds' => (int) env('LARAVEL_WAF_AGENT_BLOCK_COOLDOWN_SECONDS', 60),
         'auto_block_on_limit' => env('LARAVEL_WAF_AGENT_AUTO_BLOCK', false),
         'auto_block_on_finding' => env('LARAVEL_WAF_AGENT_AUTO_BLOCK_ON_FINDING', false),
+
+        // Nginx can use the optional Go gate before forwarding a dynamic
+        // request. A challenged request is internally retried with this
+        // private marker; the original route/controller is never executed.
+        'gate' => [
+            'enabled' => env('LARAVEL_WAF_AGENT_GATE_ENABLED', false),
+            'header' => 'X-Laravel-Waf-Gate',
+            'token' => env('LARAVEL_WAF_AGENT_GATE_TOKEN'),
+            'retry_after_seconds' => (int) env('LARAVEL_WAF_AGENT_GATE_RETRY_AFTER', 60),
+        ],
     ],
 
     'metrics' => [

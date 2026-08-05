@@ -41,3 +41,27 @@ Do not send every rate-limited request to the agent. The Laravel middleware has 
 Challenge mode has its own per-IP verification limit and a bounded post-
 verification limit. A successful challenge is therefore a temporary change in
 traffic policy, not an unlimited allowlist.
+
+## Adaptive traffic pressure
+
+Adaptive mode adds a site-wide request counter on top of the normal per-client
+limits. Normal traffic passes without a challenge. Once the shared counter
+crosses the configured threshold, browsers without a valid pass cookie receive
+the configured challenge while verified browsers continue under the bounded
+post-verification limits.
+
+```dotenv
+LARAVEL_WAF_ADAPTIVE_ENABLED=true
+LARAVEL_WAF_ADAPTIVE_CHALLENGE_AFTER=600
+LARAVEL_WAF_ADAPTIVE_WINDOW_SECONDS=60
+```
+
+This measures Laravel request pressure, not CPU or memory utilization. Use a
+shared Redis cache in multi-worker or multi-server deployments so every worker
+observes the same pressure window. Nginx and upstream limits remain responsible
+for traffic that should not reach PHP.
+
+For pressure detection before PHP, use the optional
+[`Go agent pre-application gate`](agent-gate.md). When that gate is enabled,
+disable this Laravel adaptive counter to avoid measuring and challenging the
+same traffic twice. Route limits and verified-browser limits remain active.

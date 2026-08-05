@@ -10,6 +10,7 @@ use BillingServ\LaravelWaf\Security\BehaviorTracker;
 use BillingServ\LaravelWaf\Security\Finding;
 use BillingServ\LaravelWaf\Security\RequestRuleEngine;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
+use BillingServ\LaravelWaf\Support\InternalEndpoint;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Support\SecurityNotifier;
@@ -43,7 +44,7 @@ final class RequestInspection
         }
 
         $route = $this->routeName($request);
-        if (in_array($route, $this->skipRoutes(), true)) {
+        if (InternalEndpoint::matches($request) || in_array($route, $this->skipRoutes(), true)) {
             return $next($request);
         }
 

@@ -19,13 +19,21 @@ type Registry struct {
 	mu         sync.RWMutex
 	decisions  map[counterKey]uint64
 	operations map[counterKey]uint64
+	gate       map[counterKey]uint64
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		decisions:  make(map[counterKey]uint64),
 		operations: make(map[counterKey]uint64),
+		gate:       make(map[counterKey]uint64),
 	}
+}
+
+func (r *Registry) Gate(outcome string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.gate[counterKey{Name: "gate", Outcome: outcome}]++
 }
 
 func (r *Registry) Decision(action, outcome string) {
@@ -89,6 +97,25 @@ func (r *Registry) render() string {
 		lines = append(lines, fmt.Sprintf(
 			`laravel_waf_agent_firewall_operations_total{family="%s",operation="%s",outcome="%s"} %d`,
 			escape(key.Family), escape(key.Action), escape(key.Outcome), r.operations[key],
+		))
+	}
+
+	lines = append(lines,
+		"# HELP laravel_waf_agent_gate_requests_total Requests evaluated by the pre-application traffic gate.",
+		"# TYPE laravel_waf_agent_gate_requests_total counter",
+	)
+
+	gateKeys := make([]counterKey, 0, len(r.gate))
+	for key := range r.gate {
+		gateKeys = append(gateKeys, key)
+	}
+	sort.Slice(gateKeys, func(i, j int) bool {
+		return fmt.Sprint(gateKeys[i]) < fmt.Sprint(gateKeys[j])
+	})
+	for _, key := range gateKeys {
+		lines = append(lines, fmt.Sprintf(
+			`laravel_waf_agent_gate_requests_total{outcome="%s"} %d`,
+			escape(key.Outcome), r.gate[key],
 		))
 	}
 

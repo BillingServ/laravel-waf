@@ -42,6 +42,20 @@ LARAVEL_WAF_CHALLENGE_THEME=auto
 LARAVEL_WAF_CHALLENGE_COOKIE_SECURE=auto
 ```
 
+For an automatic Anubis-style proof-of-work interstitial, use:
+
+```dotenv
+LARAVEL_WAF_CHALLENGE_TITLE="Checking your browser"
+LARAVEL_WAF_CHALLENGE_MESSAGE="This security check will continue automatically."
+LARAVEL_WAF_ALTCHA_AUTO=onload
+LARAVEL_WAF_ALTCHA_AUTO_SUBMIT=true
+LARAVEL_WAF_ALTCHA_DISPLAY=invisible
+LARAVEL_WAF_CHALLENGE_COOKIE_TTL=3600
+```
+
+The widget starts on page load and submits the verification form as soon as
+ALTCHA reports a verified proof. The Continue button remains as a fallback.
+
 `LARAVEL_WAF_ALTCHA_CHALLENGE_ATTRIBUTE` may be `challengeurl` for the
 existing widget integration or `challenge` for newer widget integrations.
 The challenge field and script URL are configurable so the WAF does not need

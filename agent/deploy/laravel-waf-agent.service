@@ -1,7 +1,8 @@
 [Unit]
 Description=Laravel WAF ipset decision agent
-After=network-online.target
-Wants=network-online.target
+After=network-online.target firewall.service
+Wants=network-online.target firewall.service
+PartOf=firewall.service
 
 [Service]
 Type=simple

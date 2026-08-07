@@ -1,11 +1,10 @@
 # laravel-waf-agent
 
-`laravel-waf-agent` is an optional Linux service for the Laravel WAF. It receives high-confidence, short-lived IP block decisions over a local Unix socket and updates administrator-created `ipset` sets. An opt-in second Unix socket can act as an Nginx traffic-pressure gate before PHP.
+`laravel-waf-agent` is an optional Linux service for the Laravel WAF. It receives high-confidence, short-lived IP block decisions over a local Unix socket, updates expiring `ipset` sets, and attaches those sets to the host INPUT chains. An opt-in second Unix socket can act as an Nginx traffic-pressure gate before PHP.
 
 By default it intentionally does not:
 
 - load XDP/eBPF programs;
-- modify iptables rules automatically;
 - inspect HTTP or TLS traffic;
 - expose a network control API;
 - require the Laravel PHP process to have root privileges.
@@ -23,21 +22,29 @@ go build -o bin/laravel-waf-agent ./cmd/laravel-waf-agent
 
 The agent is Linux-only because it invokes `ipset`.
 
-## Firewall preparation
+## Firewall lifecycle
 
-Create the sets and attach them to the input chain as an administrator. The agent can create the sets, but it does not create firewall rules:
+By default the agent creates its IPv4 and IPv6 sets and ensures that one static
+`iptables`/`ip6tables` INPUT rule references each set. It checks the rules before
+every block decision and every 30 seconds, restoring them if another firewall
+service has flushed them.
+
+The static rules do not contain individual addresses or timeouts. A block adds
+the address to the appropriate set with its requested TTL; the kernel removes
+that member automatically when the TTL expires. You can inspect the resulting
+state with:
 
 ```bash
-sudo ipset create laravel_waf_block_v4 hash:ip family inet timeout 86400 -exist
-sudo ipset create laravel_waf_block_v6 hash:ip family inet6 timeout 86400 -exist
-
-sudo iptables -C INPUT -m set --match-set laravel_waf_block_v4 src -j DROP \
-  || sudo iptables -I INPUT -m set --match-set laravel_waf_block_v4 src -j DROP
-sudo ip6tables -C INPUT -m set --match-set laravel_waf_block_v6 src -j DROP \
-  || sudo ip6tables -I INPUT -m set --match-set laravel_waf_block_v6 src -j DROP
+sudo ipset list laravel_waf_block_v4
+sudo iptables -C INPUT -m set --match-set laravel_waf_block_v4 src -j DROP
+sudo ip6tables -C INPUT -m set --match-set laravel_waf_block_v6 src -j DROP
 ```
 
-Review these rules for the host's existing firewall policy before applying them. Persist the sets and rules using the operating system's normal firewall tooling.
+The managed rules drop all incoming traffic from a listed address, including
+SSH and ICMP. Review that policy and verify trusted proxy/client-IP handling
+before enabling automatic blocks. Use `--manage-iptables=false` when another
+firewall manager owns these rules. Set `--firewall-reconcile-interval=0` to
+disable only the periodic check.
 
 ## Run
 
@@ -50,7 +57,7 @@ sudo ./bin/laravel-waf-agent \
 
 The socket group must match the PHP-FPM process group. The secret file is optional but recommended. It must match `LARAVEL_WAF_AGENT_SECRET` in the Laravel application. The metrics listener binds to loopback by default at `127.0.0.1:9919`.
 
-Use `--dry-run` while validating the integration. Start with `LARAVEL_WAF_AGENT_AUTO_BLOCK=false`; automatic host blocks should only be enabled after the application's IP and proxy configuration have been verified.
+Use `--dry-run` while validating the integration. Start with `LARAVEL_WAF_AGENT_AUTO_BLOCK=false`; automatic host blocks should only be enabled after the application's IP and proxy configuration have been verified. When the host also runs a firewall service that rebuilds INPUT, order this service after it so the initial rules are attached last.
 
 ## Optional pre-application gate
 
@@ -82,7 +89,7 @@ configuration and rollout procedure.
 
 ## Safety model
 
-The firewall decision protocol still accepts only `block_ip` and `unblock_ip`, validates IP addresses and TTLs, limits reason values, and uses argument arrays when invoking `ipset`. A stale block expires in the ipset; the agent does not maintain permanent blocks.
+The firewall decision protocol still accepts only `block_ip` and `unblock_ip`, validates IP addresses and TTLs, limits reason values, and uses argument arrays when invoking `ipset`, `iptables`, and `ip6tables`. A stale block expires in the ipset; the agent does not maintain permanent IP members.
 
 The gate listens on a separate Unix socket. Nginx is the only intended client.
 Invalid gate metadata is rejected, bypass paths are bounded, pass cookies are

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 var safeSetName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,31}$`)
@@ -19,7 +20,16 @@ type CommandRunner interface {
 type OSCommandRunner struct{}
 
 func (OSCommandRunner) Run(ctx context.Context, executable string, args ...string) error {
-	return exec.CommandContext(ctx, executable, args...).Run()
+	output, err := exec.CommandContext(ctx, executable, args...).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+
+	if message := strings.TrimSpace(string(output)); message != "" {
+		return fmt.Errorf("%w: %s", err, message)
+	}
+
+	return err
 }
 
 type IPSetBackend struct {

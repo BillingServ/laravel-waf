@@ -9,7 +9,7 @@ upstream provider → iptables/ipset → Nginx → Laravel WAF → application
 ## What each layer does
 
 - Upstream provider: protects the network link and upstream routing from volumetric attacks.
-- iptables/ipset: drops already-known abusive sources before Nginx. The optional agent only updates expiring sets; administrators own the firewall rules.
+- iptables/ipset: drops already-known abusive sources before Nginx. The optional agent owns its expiring sets and can keep their static INPUT rules attached; pass `--manage-iptables=false` when administrators manage those rules separately.
 - Nginx: handles connection limits, request rates, timeouts, body/header limits, and cheap method/host rejection.
 - Laravel WAF: applies shared-cache request limits, emits challenge decisions,
   verifies ALTCHA responses when enabled, sends optional high-confidence

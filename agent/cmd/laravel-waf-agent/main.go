@@ -24,11 +24,15 @@ func main() {
 		socketGroup      = flag.String("socket-group", "", "optional group name or numeric GID for the Unix socket")
 		secretFile       = flag.String("secret-file", "", "optional file containing the shared HMAC secret")
 		ipsetPath        = flag.String("ipset", "ipset", "ipset executable")
+		iptablesPath     = flag.String("iptables", "iptables", "iptables executable")
+		ip6tablesPath    = flag.String("ip6tables", "ip6tables", "ip6tables executable")
 		ipv4Set          = flag.String("ipv4-set", "laravel_waf_block_v4", "IPv4 ipset name")
 		ipv6Set          = flag.String("ipv6-set", "laravel_waf_block_v6", "IPv6 ipset name")
 		maxTTL           = flag.Int("max-ttl", 86400, "maximum block TTL in seconds")
 		ensureSets       = flag.Bool("ensure-ipsets", true, "create ipsets when the agent starts")
-		dryRun           = flag.Bool("dry-run", false, "validate requests without executing ipset")
+		manageIPTables   = flag.Bool("manage-iptables", true, "attach the expiring ipsets to iptables INPUT rules")
+		reconcileEvery   = flag.Duration("firewall-reconcile-interval", 30*time.Second, "interval used to restore firewall rules after a reload; zero disables periodic checks")
+		dryRun           = flag.Bool("dry-run", false, "validate requests without modifying ipset or iptables")
 		metricsAddr      = flag.String("metrics-address", "127.0.0.1:9919", "local metrics listener; empty disables metrics")
 		gateSocket       = flag.String("gate-socket", "", "optional Unix HTTP socket used by Nginx auth_request")
 		gateGroup        = flag.String("gate-socket-group", "", "optional gate socket group; defaults to socket-group")
@@ -50,8 +54,11 @@ func main() {
 	if len(secret) == 0 {
 		logger.Print("warning: no HMAC secret configured; rely on Unix socket permissions")
 	}
+	if *reconcileEvery < 0 {
+		logger.Fatal("firewall reconcile interval cannot be negative")
+	}
 
-	backend, err := firewall.NewIPSetBackend(
+	sets, err := firewall.NewIPSetBackend(
 		firewall.OSCommandRunner{},
 		*ipsetPath,
 		*ipv4Set,
@@ -65,6 +72,25 @@ func main() {
 		logger.Fatal(err)
 	}
 
+	rules, err := firewall.NewIPTablesRuleManager(
+		firewall.OSCommandRunner{},
+		*iptablesPath,
+		*ip6tablesPath,
+		*ipv4Set,
+		*ipv6Set,
+		*manageIPTables,
+		*dryRun,
+		logger,
+	)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	backend, err := firewall.NewManagedBackend(sets, rules)
+	if err != nil {
+		logger.Fatal(err)
+	}
+
 	if err := backend.Ensure(context.Background()); err != nil {
 		logger.Fatal(err)
 	}
@@ -73,6 +99,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	errors := make(chan error, 2)
+
+	if *manageIPTables && !*dryRun && *reconcileEvery > 0 {
+		go reconcileFirewallRules(ctx, backend, *reconcileEvery, logger)
+	}
 
 	if *metricsAddr != "" {
 		metricsServer := &http.Server{
@@ -149,6 +179,25 @@ func main() {
 	case err := <-errors:
 		if err != nil {
 			logger.Fatal(err)
+		}
+	}
+}
+
+func reconcileFirewallRules(ctx context.Context, backend *firewall.ManagedBackend, interval time.Duration, logger *log.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			operationContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := backend.EnsureRules(operationContext)
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				logger.Printf("firewall rule reconciliation failed: %v", err)
+			}
 		}
 	}
 }

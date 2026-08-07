@@ -1,9 +1,6 @@
 package protocol
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"testing"
 )
 
@@ -17,7 +14,7 @@ func TestDecisionSignature(t *testing.T) {
 	}
 
 	secret := []byte("test-secret")
-	decision.Signature = sign(decision, secret)
+	decision.Sign(secret)
 
 	if err := decision.Validate(86400); err != nil {
 		t.Fatalf("validate decision: %v", err)
@@ -43,8 +40,9 @@ func TestDecisionSignatureMatchesLaravelCanonicalFixture(t *testing.T) {
 	}
 
 	const expected = "c6bf8a1b5fbda480a503dac32b2560545522e6d8bca0e9af8588d0447f2eda9b"
-	if actual := sign(decision, []byte("test-secret")); actual != expected {
-		t.Fatalf("unexpected cross-language signature: %s", actual)
+	decision.Sign([]byte("test-secret"))
+	if decision.Signature != expected {
+		t.Fatalf("unexpected cross-language signature: %s", decision.Signature)
 	}
 }
 
@@ -60,13 +58,4 @@ func TestDecisionRejectsUnsafeReason(t *testing.T) {
 	if err := decision.Validate(86400); err == nil {
 		t.Fatal("expected unsafe reason to be rejected")
 	}
-}
-
-func sign(decision Decision, secret []byte) string {
-	// The production signer lives in Laravel. This test only verifies the
-	// canonical protocol format through the same HMAC primitives.
-	digest := hmac.New(sha256.New, secret)
-	_, _ = digest.Write([]byte(decision.Canonical()))
-
-	return hex.EncodeToString(digest.Sum(nil))
 }

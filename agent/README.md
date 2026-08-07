@@ -62,6 +62,31 @@ The socket group must match the PHP-FPM process group. The secret file is option
 
 Use `--dry-run` while validating the integration. Start with `LARAVEL_WAF_AGENT_AUTO_BLOCK=false`; automatic host blocks should only be enabled after the application's IP and proxy configuration have been verified. When the host also runs a firewall service that rebuilds INPUT, order this service after it so the initial rules are attached last.
 
+## Manually add or remove an IP
+
+The running agent can also accept explicit operator decisions through its
+existing Unix socket. Add an IPv4 or IPv6 address to the block set by providing
+a duration in seconds or Go duration notation (`15m`, `2h`, or `24h`):
+
+```bash
+sudo laravel-waf-agent add-ip 203.0.113.10 15m
+```
+
+Remove it before the duration expires with:
+
+```bash
+sudo laravel-waf-agent remove-ip 203.0.113.10
+```
+
+Both commands use `/run/laravel-waf/agent.sock` by default. Pass
+`--socket /another/path.sock` before the IP when the service uses a different
+socket. They automatically read `/etc/laravel-waf/agent.secret`; use
+`--secret-file /another/path` only when the running service uses a different
+secret file. For a service configured without HMAC authentication, pass
+`--secret-file=`. A block can last from one second to 24 hours, and may be
+further limited by the service's `--max-ttl` setting. Adding an existing address
+updates its expiry. Removing an address is safe even if it has already expired.
+
 ## Optional pre-application gate
 
 Gate mode is enabled only when `--gate-socket` is set:

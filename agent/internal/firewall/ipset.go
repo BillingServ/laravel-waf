@@ -102,7 +102,7 @@ func (b *IPSetBackend) Unblock(ctx context.Context, ip net.IP) error {
 		return err
 	}
 
-	return b.run(ctx, "unblock", "del", set, normalized)
+	return b.run(ctx, "unblock", "del", set, normalized, "-exist")
 }
 
 func (b *IPSetBackend) create(ctx context.Context, set, family string) error {

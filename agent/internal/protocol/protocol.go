@@ -11,7 +11,10 @@ import (
 	"strings"
 )
 
-const Version = 1
+const (
+	Version       = 1
+	MaxTTLSeconds = 86400
+)
 
 var safeReason = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
 
@@ -66,8 +69,22 @@ func (d Decision) Verify(secret []byte) bool {
 		return false
 	}
 
+	return hmac.Equal(signature, d.signature(secret))
+}
+
+// Sign sets the HMAC signature used by authenticated agent sockets. An empty
+// secret leaves the signature empty for agents secured only by socket
+// permissions.
+func (d *Decision) Sign(secret []byte) {
+	d.Signature = ""
+	if len(secret) > 0 {
+		d.Signature = hex.EncodeToString(d.signature(secret))
+	}
+}
+
+func (d Decision) signature(secret []byte) []byte {
 	digest := hmac.New(sha256.New, secret)
 	_, _ = digest.Write([]byte(d.Canonical()))
 
-	return hmac.Equal(signature, digest.Sum(nil))
+	return digest.Sum(nil)
 }

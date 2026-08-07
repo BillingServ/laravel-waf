@@ -2,23 +2,45 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/BillingServ/laravel-waf/agent/internal/control"
 	"github.com/BillingServ/laravel-waf/agent/internal/firewall"
 	"github.com/BillingServ/laravel-waf/agent/internal/gate"
 	"github.com/BillingServ/laravel-waf/agent/internal/metrics"
+	"github.com/BillingServ/laravel-waf/agent/internal/protocol"
 	"github.com/BillingServ/laravel-waf/agent/internal/server"
 )
 
+const defaultControlSecretFile = "/etc/laravel-waf/agent.secret"
+
 func main() {
+	handled, err := runControlCommand(os.Args[1:], os.Stdout, os.Stderr)
+	if handled {
+		if err == nil || errors.Is(err, flag.ErrHelp) {
+			return
+		}
+
+		_, _ = fmt.Fprintf(os.Stderr, "laravel-waf-agent: %v\n", err)
+		os.Exit(1)
+	}
+
+	runDaemon()
+}
+
+func runDaemon() {
 	var (
 		socket           = flag.String("socket", "/run/laravel-waf/agent.sock", "absolute Unix socket path")
 		socketGroup      = flag.String("socket-group", "", "optional group name or numeric GID for the Unix socket")
@@ -29,7 +51,7 @@ func main() {
 		ipv4Set          = flag.String("ipv4-set", "laravel_waf_block_v4", "IPv4 ipset name")
 		ipv6Set          = flag.String("ipv6-set", "laravel_waf_block_v6", "IPv6 ipset name")
 		blockTCPPorts    = flag.String("block-tcp-ports", "80,443", "comma-separated TCP destination ports blocked for listed IPs")
-		maxTTL           = flag.Int("max-ttl", 86400, "maximum block TTL in seconds")
+		maxTTL           = flag.Int("max-ttl", protocol.MaxTTLSeconds, "maximum block TTL in seconds")
 		ensureSets       = flag.Bool("ensure-ipsets", true, "create ipsets when the agent starts")
 		manageIPTables   = flag.Bool("manage-iptables", true, "attach the expiring ipsets to iptables INPUT rules")
 		reconcileEvery   = flag.Duration("firewall-reconcile-interval", 30*time.Second, "interval used to restore firewall rules after a reload; zero disables periodic checks")
@@ -45,6 +67,15 @@ func main() {
 		cookieSecretFile = flag.String("challenge-secret-file", "", "file containing LARAVEL_WAF_CHALLENGE_COOKIE_SECRET for gate pass validation")
 		gateTokenFile    = flag.String("gate-token-file", "", "file containing LARAVEL_WAF_AGENT_GATE_TOKEN for authenticated challenge markers")
 	)
+	flag.Usage = func() {
+		output := flag.CommandLine.Output()
+		_, _ = fmt.Fprintln(output, "Usage:")
+		_, _ = fmt.Fprintln(output, "  laravel-waf-agent [daemon options]")
+		_, _ = fmt.Fprintln(output, "  laravel-waf-agent add-ip [options] <ip> <duration>")
+		_, _ = fmt.Fprintln(output, "  laravel-waf-agent remove-ip [options] <ip>")
+		_, _ = fmt.Fprintln(output, "\nDaemon options:")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
 	logger := log.New(os.Stdout, "laravel-waf-agent ", log.LstdFlags)
@@ -183,6 +214,112 @@ func main() {
 			logger.Fatal(err)
 		}
 	}
+}
+
+func runControlCommand(args []string, stdout, stderr io.Writer) (bool, error) {
+	if len(args) == 0 || (args[0] != "add-ip" && args[0] != "remove-ip") {
+		return false, nil
+	}
+
+	command := args[0]
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	socket := flags.String("socket", "/run/laravel-waf/agent.sock", "absolute Unix socket path")
+	secretFile := flags.String("secret-file", defaultControlSecretFile, "file containing the shared HMAC secret")
+	timeout := flags.Duration("timeout", 2*time.Second, "socket request timeout")
+	reason := flags.String("reason", "manual", "bounded reason recorded for the decision")
+	flags.Usage = func() {
+		if command == "add-ip" {
+			_, _ = fmt.Fprintf(stderr, "Usage: laravel-waf-agent add-ip [options] <ip> <duration>\n\nDuration accepts seconds or Go duration notation such as 15m or 2h.\n\n")
+		} else {
+			_, _ = fmt.Fprintf(stderr, "Usage: laravel-waf-agent remove-ip [options] <ip>\n\n")
+		}
+		flags.PrintDefaults()
+	}
+
+	if err := flags.Parse(args[1:]); err != nil {
+		return true, err
+	}
+
+	expectedArgs := 1
+	if command == "add-ip" {
+		expectedArgs = 2
+	}
+	if flags.NArg() != expectedArgs {
+		flags.Usage()
+
+		return true, fmt.Errorf("invalid arguments")
+	}
+
+	ip := net.ParseIP(flags.Arg(0))
+	if ip == nil {
+		return true, fmt.Errorf("invalid IP address %q", flags.Arg(0))
+	}
+
+	decision := protocol.Decision{
+		Version: protocol.Version,
+		IP:      ip.String(),
+		Reason:  *reason,
+	}
+	if command == "add-ip" {
+		ttl, err := parseTTL(flags.Arg(1))
+		if err != nil {
+			return true, err
+		}
+
+		decision.Action = "block_ip"
+		decision.TTLSeconds = ttl
+	} else {
+		decision.Action = "unblock_ip"
+	}
+
+	secret, err := readSecret(*secretFile)
+	if err != nil {
+		return true, err
+	}
+
+	client := control.Client{
+		Socket:  *socket,
+		Secret:  secret,
+		Timeout: *timeout,
+	}
+	if err := client.Send(context.Background(), decision); err != nil {
+		return true, err
+	}
+
+	if command == "add-ip" {
+		_, _ = fmt.Fprintf(stdout, "added %s to the block set for %s\n", decision.IP, (time.Duration(decision.TTLSeconds) * time.Second).String())
+	} else {
+		_, _ = fmt.Fprintf(stdout, "removed %s from the block set\n", decision.IP)
+	}
+
+	return true, nil
+}
+
+func parseTTL(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, fmt.Errorf("block duration is required")
+	}
+
+	seconds, secondsErr := strconv.ParseInt(value, 10, 64)
+	if secondsErr != nil {
+		duration, err := time.ParseDuration(value)
+		if err != nil {
+			return 0, fmt.Errorf("invalid block duration %q (use seconds, 15m, or 2h)", value)
+		}
+		if duration%time.Second != 0 {
+			return 0, fmt.Errorf("block duration must use whole seconds")
+		}
+
+		seconds = int64(duration / time.Second)
+	}
+
+	if seconds < 1 || seconds > protocol.MaxTTLSeconds {
+		return 0, fmt.Errorf("block duration must be between 1 and %d seconds", protocol.MaxTTLSeconds)
+	}
+
+	return int(seconds), nil
 }
 
 func reconcileFirewallRules(ctx context.Context, backend *firewall.ManagedBackend, interval time.Duration, logger *log.Logger) {

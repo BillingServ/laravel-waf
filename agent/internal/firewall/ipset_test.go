@@ -57,6 +57,23 @@ func TestBlockUsesIPv6Set(t *testing.T) {
 	}
 }
 
+func TestUnblockIsIdempotent(t *testing.T) {
+	runner := &recordingRunner{}
+	backend, err := NewIPSetBackend(runner, "ipset", "waf_v4", "waf_v6", 3600, false, false, nil)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	if err := backend.Unblock(context.Background(), net.ParseIP("203.0.113.10")); err != nil {
+		t.Fatalf("unblock IP: %v", err)
+	}
+
+	expected := [][]string{{"del", "waf_v4", "203.0.113.10", "-exist"}}
+	if !reflect.DeepEqual(expected, runner.args) {
+		t.Fatalf("unexpected command arguments: %#v", runner.args)
+	}
+}
+
 func TestInvalidSetNameIsRejected(t *testing.T) {
 	if _, err := NewIPSetBackend(nil, "ipset", "waf;drop", "waf_v6", 3600, false, false, nil); err == nil {
 		t.Fatal("expected invalid set name to be rejected")

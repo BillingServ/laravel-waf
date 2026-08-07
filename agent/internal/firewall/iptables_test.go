@@ -31,13 +31,14 @@ func (r *scriptedRunner) Run(_ context.Context, executable string, args ...strin
 
 func TestIPTablesEnsureInsertsMissingIPv4AndIPv6Rules(t *testing.T) {
 	missing := errors.New("rule does not exist")
-	runner := &scriptedRunner{results: []error{missing, nil, missing, nil}}
+	runner := &scriptedRunner{results: []error{missing, missing, nil, missing, missing, nil}}
 	manager, err := NewIPTablesRuleManager(
 		runner,
 		"/usr/sbin/iptables",
 		"/usr/sbin/ip6tables",
 		"waf_v4",
 		"waf_v6",
+		"80,443",
 		true,
 		false,
 		nil,
@@ -52,9 +53,11 @@ func TestIPTablesEnsureInsertsMissingIPv4AndIPv6Rules(t *testing.T) {
 
 	expected := []commandCall{
 		{executable: "/usr/sbin/iptables", args: []string{"-w", "5", "-C", "INPUT", "-m", "set", "--match-set", "waf_v4", "src", "-j", "DROP"}},
-		{executable: "/usr/sbin/iptables", args: []string{"-w", "5", "-I", "INPUT", "1", "-m", "set", "--match-set", "waf_v4", "src", "-j", "DROP"}},
+		{executable: "/usr/sbin/iptables", args: []string{"-w", "5", "-C", "INPUT", "-p", "tcp", "-m", "multiport", "--dports", "80,443", "-m", "set", "--match-set", "waf_v4", "src", "-j", "DROP"}},
+		{executable: "/usr/sbin/iptables", args: []string{"-w", "5", "-I", "INPUT", "1", "-p", "tcp", "-m", "multiport", "--dports", "80,443", "-m", "set", "--match-set", "waf_v4", "src", "-j", "DROP"}},
 		{executable: "/usr/sbin/ip6tables", args: []string{"-w", "5", "-C", "INPUT", "-m", "set", "--match-set", "waf_v6", "src", "-j", "DROP"}},
-		{executable: "/usr/sbin/ip6tables", args: []string{"-w", "5", "-I", "INPUT", "1", "-m", "set", "--match-set", "waf_v6", "src", "-j", "DROP"}},
+		{executable: "/usr/sbin/ip6tables", args: []string{"-w", "5", "-C", "INPUT", "-p", "tcp", "-m", "multiport", "--dports", "80,443", "-m", "set", "--match-set", "waf_v6", "src", "-j", "DROP"}},
+		{executable: "/usr/sbin/ip6tables", args: []string{"-w", "5", "-I", "INPUT", "1", "-p", "tcp", "-m", "multiport", "--dports", "80,443", "-m", "set", "--match-set", "waf_v6", "src", "-j", "DROP"}},
 	}
 	if !reflect.DeepEqual(expected, runner.calls) {
 		t.Fatalf("unexpected commands: %#v", runner.calls)
@@ -62,8 +65,9 @@ func TestIPTablesEnsureInsertsMissingIPv4AndIPv6Rules(t *testing.T) {
 }
 
 func TestIPTablesEnsureDoesNotDuplicateExistingRules(t *testing.T) {
-	runner := &scriptedRunner{}
-	manager, err := NewIPTablesRuleManager(runner, "iptables", "ip6tables", "waf_v4", "waf_v6", true, false, nil)
+	missing := errors.New("rule does not exist")
+	runner := &scriptedRunner{results: []error{missing, nil, missing, nil}}
+	manager, err := NewIPTablesRuleManager(runner, "iptables", "ip6tables", "waf_v4", "waf_v6", "80,443", true, false, nil)
 	if err != nil {
 		t.Fatalf("create rule manager: %v", err)
 	}
@@ -72,8 +76,8 @@ func TestIPTablesEnsureDoesNotDuplicateExistingRules(t *testing.T) {
 		t.Fatalf("ensure rules: %v", err)
 	}
 
-	if len(runner.calls) != 2 {
-		t.Fatalf("expected two check commands, got %#v", runner.calls)
+	if len(runner.calls) != 4 {
+		t.Fatalf("expected four check commands, got %#v", runner.calls)
 	}
 	for _, call := range runner.calls {
 		if len(call.args) < 3 || call.args[2] != "-C" {
@@ -85,8 +89,8 @@ func TestIPTablesEnsureDoesNotDuplicateExistingRules(t *testing.T) {
 func TestIPTablesEnsureReportsInsertFailure(t *testing.T) {
 	missing := errors.New("rule does not exist")
 	insertFailure := errors.New("permission denied")
-	runner := &scriptedRunner{results: []error{missing, insertFailure}}
-	manager, err := NewIPTablesRuleManager(runner, "iptables", "ip6tables", "waf_v4", "waf_v6", true, false, nil)
+	runner := &scriptedRunner{results: []error{missing, missing, insertFailure}}
+	manager, err := NewIPTablesRuleManager(runner, "iptables", "ip6tables", "waf_v4", "waf_v6", "80,443", true, false, nil)
 	if err != nil {
 		t.Fatalf("create rule manager: %v", err)
 	}
@@ -98,7 +102,7 @@ func TestIPTablesEnsureReportsInsertFailure(t *testing.T) {
 
 func TestIPTablesDryRunDoesNotExecuteCommands(t *testing.T) {
 	runner := &scriptedRunner{}
-	manager, err := NewIPTablesRuleManager(runner, "iptables", "ip6tables", "waf_v4", "waf_v6", true, true, nil)
+	manager, err := NewIPTablesRuleManager(runner, "iptables", "ip6tables", "waf_v4", "waf_v6", "80,443", true, true, nil)
 	if err != nil {
 		t.Fatalf("create rule manager: %v", err)
 	}
@@ -112,10 +116,45 @@ func TestIPTablesDryRunDoesNotExecuteCommands(t *testing.T) {
 }
 
 func TestIPTablesRejectsInvalidConfiguration(t *testing.T) {
-	if _, err := NewIPTablesRuleManager(nil, "iptables", "ip6tables", "waf;drop", "waf_v6", true, false, nil); err == nil {
+	if _, err := NewIPTablesRuleManager(nil, "iptables", "ip6tables", "waf;drop", "waf_v6", "80,443", true, false, nil); err == nil {
 		t.Fatal("expected invalid set name to be rejected")
 	}
-	if _, err := NewIPTablesRuleManager(nil, "", "ip6tables", "waf_v4", "waf_v6", true, false, nil); err == nil {
+	if _, err := NewIPTablesRuleManager(nil, "", "ip6tables", "waf_v4", "waf_v6", "80,443", true, false, nil); err == nil {
 		t.Fatal("expected missing executable to be rejected")
+	}
+	if _, err := NewIPTablesRuleManager(nil, "iptables", "ip6tables", "waf_v4", "waf_v6", "80,invalid", true, false, nil); err == nil {
+		t.Fatal("expected invalid TCP port to be rejected")
+	}
+}
+
+func TestIPTablesEnsureRemovesLegacyAllTrafficRules(t *testing.T) {
+	missing := errors.New("rule does not exist")
+	runner := &scriptedRunner{results: []error{nil, nil, missing, nil, nil, nil, missing, nil}}
+	manager, err := NewIPTablesRuleManager(runner, "iptables", "ip6tables", "waf_v4", "waf_v6", "80,443", true, false, nil)
+	if err != nil {
+		t.Fatalf("create rule manager: %v", err)
+	}
+
+	if err := manager.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure rules: %v", err)
+	}
+
+	expectedDelete := []string{"-w", "5", "-D", "INPUT", "-m", "set", "--match-set", "waf_v4", "src", "-j", "DROP"}
+	if !reflect.DeepEqual(expectedDelete, runner.calls[1].args) {
+		t.Fatalf("legacy IPv4 rule was not removed: %#v", runner.calls)
+	}
+	expectedIPv6Delete := []string{"-w", "5", "-D", "INPUT", "-m", "set", "--match-set", "waf_v6", "src", "-j", "DROP"}
+	if !reflect.DeepEqual(expectedIPv6Delete, runner.calls[5].args) {
+		t.Fatalf("legacy IPv6 rule was not removed: %#v", runner.calls)
+	}
+}
+
+func TestNormalizeTCPPorts(t *testing.T) {
+	ports, err := normalizeTCPPorts("443, 80,443")
+	if err != nil {
+		t.Fatalf("normalize ports: %v", err)
+	}
+	if ports != "443,80" {
+		t.Fatalf("unexpected normalized ports: %s", ports)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -16,6 +17,7 @@ type IPTablesRuleManager struct {
 	IPv6Executable string
 	IPv4Set        string
 	IPv6Set        string
+	TCPPorts       string
 	Enabled        bool
 	DryRun         bool
 	Logger         *log.Logger
@@ -25,7 +27,7 @@ type IPTablesRuleManager struct {
 
 func NewIPTablesRuleManager(
 	runner CommandRunner,
-	ipv4Executable, ipv6Executable, ipv4Set, ipv6Set string,
+	ipv4Executable, ipv6Executable, ipv4Set, ipv6Set, tcpPorts string,
 	enabled, dryRun bool,
 	logger *log.Logger,
 ) (*IPTablesRuleManager, error) {
@@ -41,12 +43,18 @@ func NewIPTablesRuleManager(
 		return nil, fmt.Errorf("iptables and ip6tables executables are required")
 	}
 
+	normalizedPorts, err := normalizeTCPPorts(tcpPorts)
+	if err != nil {
+		return nil, err
+	}
+
 	return &IPTablesRuleManager{
 		Runner:         runner,
 		IPv4Executable: ipv4Executable,
 		IPv6Executable: ipv6Executable,
 		IPv4Set:        ipv4Set,
 		IPv6Set:        ipv6Set,
+		TCPPorts:       normalizedPorts,
 		Enabled:        enabled,
 		DryRun:         dryRun,
 		Logger:         logger,
@@ -83,7 +91,17 @@ func (m *IPTablesRuleManager) Ensure(ctx context.Context) error {
 }
 
 func (m *IPTablesRuleManager) ensureRule(ctx context.Context, executable, set string) error {
-	rule := []string{"INPUT", "-m", "set", "--match-set", set, "src", "-j", "DROP"}
+	if err := m.removeLegacyAllTrafficRule(ctx, executable, set); err != nil {
+		return err
+	}
+
+	rule := []string{
+		"INPUT",
+		"-p", "tcp",
+		"-m", "multiport", "--dports", m.TCPPorts,
+		"-m", "set", "--match-set", set, "src",
+		"-j", "DROP",
+	}
 	check := append([]string{"-w", "5", "-C"}, rule...)
 	if err := m.Runner.Run(ctx, executable, check...); err == nil {
 		return nil
@@ -105,4 +123,53 @@ func (m *IPTablesRuleManager) ensureRule(ctx context.Context, executable, set st
 	}
 
 	return nil
+}
+
+func (m *IPTablesRuleManager) removeLegacyAllTrafficRule(ctx context.Context, executable, set string) error {
+	legacyRule := []string{"INPUT", "-m", "set", "--match-set", set, "src", "-j", "DROP"}
+	check := append([]string{"-w", "5", "-C"}, legacyRule...)
+	if err := m.Runner.Run(ctx, executable, check...); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+
+		return nil
+	}
+
+	remove := append([]string{"-w", "5", "-D"}, legacyRule...)
+	if err := m.Runner.Run(ctx, executable, remove...); err != nil {
+		return fmt.Errorf("remove legacy all-traffic rule: %w", err)
+	}
+
+	if m.Logger != nil {
+		m.Logger.Printf("removed legacy all-traffic firewall rule for ipset %s", set)
+	}
+
+	return nil
+}
+
+func normalizeTCPPorts(value string) (string, error) {
+	parts := strings.Split(value, ",")
+	ports := make([]string, 0, len(parts))
+	seen := make(map[int]struct{}, len(parts))
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		port, err := strconv.Atoi(part)
+		if err != nil || port < 1 || port > 65535 {
+			return "", fmt.Errorf("invalid TCP block port %q", part)
+		}
+		if _, exists := seen[port]; exists {
+			continue
+		}
+
+		seen[port] = struct{}{}
+		ports = append(ports, strconv.Itoa(port))
+	}
+
+	if len(ports) == 0 || len(ports) > 15 {
+		return "", fmt.Errorf("TCP block ports must contain between 1 and 15 unique ports")
+	}
+
+	return strings.Join(ports, ","), nil
 }

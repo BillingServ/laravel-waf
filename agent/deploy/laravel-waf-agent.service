@@ -6,7 +6,7 @@ PartOf=firewall.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/laravel-waf-agent --socket /run/laravel-waf/agent.sock --socket-group www-data --secret-file /etc/laravel-waf/agent.secret
+ExecStart=/usr/local/bin/laravel-waf-agent --socket /run/laravel-waf/agent.sock --socket-group www-data --secret-file /etc/laravel-waf/agent.secret --block-tcp-ports 80,443
 Restart=on-failure
 RestartSec=5s
 User=root

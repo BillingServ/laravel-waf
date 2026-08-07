@@ -1,6 +1,6 @@
 # laravel-waf-agent
 
-`laravel-waf-agent` is an optional Linux service for the Laravel WAF. It receives high-confidence, short-lived IP block decisions over a local Unix socket, updates expiring `ipset` sets, and attaches those sets to the host INPUT chains. An opt-in second Unix socket can act as an Nginx traffic-pressure gate before PHP.
+`laravel-waf-agent` is an optional Linux service for the Laravel WAF. It receives high-confidence, short-lived IP block decisions over a local Unix socket, updates expiring `ipset` sets, and attaches those sets to TCP ports 80 and 443 in the host INPUT chains. An opt-in second Unix socket can act as an Nginx traffic-pressure gate before PHP.
 
 By default it intentionally does not:
 
@@ -29,6 +29,9 @@ By default the agent creates its IPv4 and IPv6 sets and ensures that one static
 every block decision and every 30 seconds, restoring them if another firewall
 service has flushed them.
 
+On upgrade, the agent removes the legacy set rules that dropped all incoming
+traffic before installing the web-only rules.
+
 The static rules do not contain individual addresses or timeouts. A block adds
 the address to the appropriate set with its requested TTL; the kernel removes
 that member automatically when the TTL expires. You can inspect the resulting
@@ -36,15 +39,15 @@ state with:
 
 ```bash
 sudo ipset list laravel_waf_block_v4
-sudo iptables -C INPUT -m set --match-set laravel_waf_block_v4 src -j DROP
-sudo ip6tables -C INPUT -m set --match-set laravel_waf_block_v6 src -j DROP
+sudo iptables -C INPUT -p tcp -m multiport --dports 80,443 -m set --match-set laravel_waf_block_v4 src -j DROP
+sudo ip6tables -C INPUT -p tcp -m multiport --dports 80,443 -m set --match-set laravel_waf_block_v6 src -j DROP
 ```
 
-The managed rules drop all incoming traffic from a listed address, including
-SSH and ICMP. Review that policy and verify trusted proxy/client-IP handling
-before enabling automatic blocks. Use `--manage-iptables=false` when another
-firewall manager owns these rules. Set `--firewall-reconcile-interval=0` to
-disable only the periodic check.
+The managed rules drop only TCP traffic to ports 80 and 443. SSH, ICMP, and
+other services remain reachable. Change the comma-separated ports with
+`--block-tcp-ports`, or use `--manage-iptables=false` when another firewall
+manager owns these rules. Set `--firewall-reconcile-interval=0` to disable only
+the periodic check.
 
 ## Run
 

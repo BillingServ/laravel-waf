@@ -28,6 +28,7 @@ func main() {
 		ip6tablesPath    = flag.String("ip6tables", "ip6tables", "ip6tables executable")
 		ipv4Set          = flag.String("ipv4-set", "laravel_waf_block_v4", "IPv4 ipset name")
 		ipv6Set          = flag.String("ipv6-set", "laravel_waf_block_v6", "IPv6 ipset name")
+		blockTCPPorts    = flag.String("block-tcp-ports", "80,443", "comma-separated TCP destination ports blocked for listed IPs")
 		maxTTL           = flag.Int("max-ttl", 86400, "maximum block TTL in seconds")
 		ensureSets       = flag.Bool("ensure-ipsets", true, "create ipsets when the agent starts")
 		manageIPTables   = flag.Bool("manage-iptables", true, "attach the expiring ipsets to iptables INPUT rules")
@@ -78,6 +79,7 @@ func main() {
 		*ip6tablesPath,
 		*ipv4Set,
 		*ipv6Set,
+		*blockTCPPorts,
 		*manageIPTables,
 		*dryRun,
 		logger,

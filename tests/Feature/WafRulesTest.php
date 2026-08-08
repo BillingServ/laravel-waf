@@ -3,6 +3,7 @@
 namespace BillingServ\LaravelWaf\Tests\Feature;
 
 use BillingServ\LaravelWaf\Contracts\ChallengeVerifier;
+use BillingServ\LaravelWaf\Contracts\DecisionSink;
 use BillingServ\LaravelWaf\Contracts\GeoIpResolver;
 use BillingServ\LaravelWaf\Contracts\NotificationSink;
 use BillingServ\LaravelWaf\Http\Middleware\LoginProtection;
@@ -74,8 +75,20 @@ final class WafRulesTest extends TestCase
             ->assertStatus(403);
     }
 
-    public function test_livewire_sql_injection_redirects_to_the_top_level_blocked_page(): void
+    public function test_livewire_sql_injection_renders_the_blocked_state_without_a_follow_up_request(): void
     {
+        config()->set('laravel-waf.agent.enabled', true);
+        config()->set('laravel-waf.agent.auto_block_on_finding', true);
+        $decisionSink = new class implements DecisionSink {
+            public int $blocks = 0;
+
+            public function block(string $ip, int $ttlSeconds, string $reason): void
+            {
+                $this->blocks++;
+            }
+        };
+        app()->instance(DecisionSink::class, $decisionSink);
+
         $snapshot = json_encode([
             'data' => ['email' => '=1 UNION SELECT password FROM users'],
             'memo' => ['id' => 'test-component', 'name' => 'login', 'children' => []],
@@ -94,7 +107,14 @@ final class WafRulesTest extends TestCase
 
         $response->assertOk()
             ->assertHeader('X-Laravel-Waf-Blocked', 'true')
-            ->assertJsonPath('components.0.effects.redirect', url('/_waf/blocked'));
+            ->assertJsonPath('components.0.effects.dirty', []);
+
+        $effects = $response->json('components.0.effects');
+        self::assertIsArray($effects);
+        self::assertArrayNotHasKey('redirect', $effects);
+        self::assertStringContainsString('Why have I been blocked?', (string) ($effects['html'] ?? ''));
+        self::assertStringContainsString('data-laravel-waf-blocked="true"', (string) ($effects['html'] ?? ''));
+        self::assertSame(1, $decisionSink->blocks);
 
         $this->get('/_waf/blocked')
             ->assertStatus(403)
@@ -106,16 +126,20 @@ final class WafRulesTest extends TestCase
             'checksum' => 'test-checksum',
         ];
 
-        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.56'])
+        $legacyResponse = $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.56'])
             ->withHeaders(['X-Livewire' => 'true'])
             ->postJson('/inspect', [
                 'fingerprint' => ['id' => 'test-component', 'name' => 'login', 'locale' => 'en'],
                 'serverMemo' => $serverMemo,
                 'updates' => [],
-            ])
-            ->assertOk()
-            ->assertJsonPath('effects.redirect', url('/_waf/blocked'))
+            ]);
+        $legacyResponse->assertOk()
+            ->assertJsonPath('effects.dirty', [])
             ->assertJsonPath('serverMemo.data.email', '=1 UNION SELECT password FROM users');
+
+        $legacyEffects = $legacyResponse->json('effects');
+        self::assertIsArray($legacyEffects);
+        self::assertStringContainsString('Why have I been blocked?', (string) ($legacyEffects['html'] ?? ''));
     }
 
     public function test_rfi_is_blocked_for_a_file_like_parameter(): void

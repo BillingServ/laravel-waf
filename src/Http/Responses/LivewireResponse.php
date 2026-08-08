@@ -5,16 +5,15 @@ namespace BillingServ\LaravelWaf\Http\Responses;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Throwable;
 
 final class LivewireResponse
 {
     /**
-     * Return the Livewire response shape for a top-level blocked-page redirect.
+     * Return a Livewire response that renders the blocked state in-place.
      *
-     * Livewire requires a successful JSON response for client-side redirects.
-     * The incoming snapshots are returned unchanged so the client can finish
-     * the current commit before navigating away.
+     * A blocked IP may already be in an ipset before this response is sent.
+     * Rendering the state in the current response avoids a second browser
+     * request to the blocked route, which iptables cannot exempt by URI.
      */
     public static function blocked(Request $request, array $headers = []): ?Response
     {
@@ -22,12 +21,7 @@ final class LivewireResponse
             return null;
         }
 
-        $url = self::blockedUrl();
         $components = $request->input('components');
-        if ($url === null) {
-            return null;
-        }
-
         if (is_array($components) && $components !== []) {
             $responses = [];
             foreach ($components as $component) {
@@ -37,7 +31,10 @@ final class LivewireResponse
 
                 $responses[] = [
                     'snapshot' => $component['snapshot'],
-                    'effects' => ['redirect' => $url],
+                    'effects' => [
+                        'html' => self::blockedFragment($component['snapshot']),
+                        'dirty' => [],
+                    ],
                 ];
             }
 
@@ -54,9 +51,8 @@ final class LivewireResponse
 
         return new JsonResponse([
             'effects' => [
-                'html' => null,
+                'html' => self::blockedFragment(null, $request),
                 'dirty' => [],
-                'redirect' => $url,
             ],
             'serverMemo' => $serverMemo,
         ], 200, $headers);
@@ -67,17 +63,43 @@ final class LivewireResponse
         return $request->hasHeader('X-Livewire');
     }
 
-    private static function blockedUrl(): ?string
+    private static function blockedFragment(?string $snapshot, ?Request $request = null): string
     {
-        $route = config('laravel-waf.challenge.blocked_route', 'laravel-waf.blocked');
-        if (!is_string($route) || $route === '') {
+        $componentId = self::componentId($snapshot);
+        if ($componentId === null && $request !== null) {
+            $componentId = self::safeComponentId($request->input('fingerprint.id'))
+                ?? self::safeComponentId($request->input('serverMemo.id'));
+        }
+
+        return ChallengePage::blockedFragment(
+            (string) config('laravel-waf.challenge.blocked_title', 'Request blocked'),
+            (string) config('laravel-waf.challenge.blocked_message', 'This request was blocked by the site security policy.'),
+            $componentId,
+        );
+    }
+
+    private static function componentId(?string $snapshot): ?string
+    {
+        if ($snapshot === null || $snapshot === '') {
             return null;
         }
 
         try {
-            return route($route);
-        } catch (Throwable) {
+            $decoded = json_decode($snapshot, true, 32, JSON_THROW_ON_ERROR);
+        } catch (\Throwable) {
             return null;
         }
+
+        return is_array($decoded)
+            ? self::safeComponentId($decoded['memo']['id'] ?? null)
+            : null;
+    }
+
+    private static function safeComponentId(mixed $componentId): ?string
+    {
+        return is_string($componentId)
+            && preg_match('/^[A-Za-z0-9_-]{1,128}$/', $componentId) === 1
+            ? $componentId
+            : null;
     }
 }

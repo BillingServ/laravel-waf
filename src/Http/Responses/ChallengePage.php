@@ -90,6 +90,30 @@ final class ChallengePage
         return self::document($title, 'blocked', $content);
     }
 
+    public static function blockedFragment(
+        string $title = 'Request blocked',
+        string $message = 'This request was blocked by the site security policy.',
+        ?string $componentId = null,
+    ): string {
+        $wireId = $componentId === null
+            ? ''
+            : ' wire:id="'.self::escape($componentId).'"';
+
+        return '<div'.$wireId.' class="laravel-waf-blocked-fragment" role="alert" '
+            .'data-laravel-waf-blocked="true" '
+            .'style="box-sizing:border-box;width:100%;max-width:760px;margin:0 auto;padding:40px 24px;color:#1f2937;background:#fff;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;text-align:center">'
+            .'<div aria-hidden="true" style="width:72px;height:72px;margin:0 auto 20px;border-radius:50%;color:#fff;background:#b42318;font-size:58px;font-weight:300;line-height:68px">×</div>'
+            .'<h1 style="margin:0;color:#101828;font-size:24px;font-weight:600;line-height:1.3">'.self::escape($title).'</h1>'
+            .'<p style="max-width:520px;margin:10px auto 28px;color:#667085;font-size:15px;line-height:1.55">'.self::escape($message).'</p>'
+            .'<div style="display:grid;gap:16px;padding-top:24px;border-top:1px solid #e4e7ec;text-align:left">'
+            .'<section><h2 style="margin:0;color:#101828;font-size:18px;font-weight:500;line-height:1.35">Why have I been blocked?</h2>'
+            .'<p style="margin:8px 0 0;color:#667085;font-size:13px;line-height:1.6">This site uses automated security checks to protect against abusive or malicious traffic. The request matched a rule that prevents it from continuing.</p></section>'
+            .'<section><h2 style="margin:0;color:#101828;font-size:18px;font-weight:500;line-height:1.35">What can I do to resolve this?</h2>'
+            .'<p style="margin:8px 0 0;color:#667085;font-size:13px;line-height:1.6">Return to the previous page and try again. If the problem continues, contact the site owner and include when this page appeared.</p></section>'
+            .'</div>'
+            .'</div>';
+    }
+
     private static function document(string $title, string $state, string $content, string $head = ''): string
     {
         $favicon = self::assetUrl(config('laravel-waf.challenge.favicon_url'));

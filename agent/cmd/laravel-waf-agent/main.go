@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,8 +15,10 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
+	"github.com/BillingServ/laravel-waf/agent/internal/blocklist"
 	"github.com/BillingServ/laravel-waf/agent/internal/control"
 	"github.com/BillingServ/laravel-waf/agent/internal/firewall"
 	"github.com/BillingServ/laravel-waf/agent/internal/gate"
@@ -24,7 +27,10 @@ import (
 	"github.com/BillingServ/laravel-waf/agent/internal/server"
 )
 
-const defaultControlSecretFile = "/etc/laravel-waf/agent.secret"
+const (
+	defaultControlSecretFile = "/etc/laravel-waf/agent.secret"
+	defaultBlockStateFile    = "/var/lib/laravel-waf/blocks.json"
+)
 
 func main() {
 	handled, err := runControlCommand(os.Args[1:], os.Stdout, os.Stderr)
@@ -45,6 +51,7 @@ func runDaemon() {
 		socket           = flag.String("socket", "/run/laravel-waf/agent.sock", "absolute Unix socket path")
 		socketGroup      = flag.String("socket-group", "", "optional group name or numeric GID for the Unix socket")
 		secretFile       = flag.String("secret-file", "", "optional file containing the shared HMAC secret")
+		stateFile        = flag.String("state-file", defaultBlockStateFile, "file storing active block reasons and expiries")
 		ipsetPath        = flag.String("ipset", "ipset", "ipset executable")
 		iptablesPath     = flag.String("iptables", "iptables", "iptables executable")
 		ip6tablesPath    = flag.String("ip6tables", "ip6tables", "ip6tables executable")
@@ -73,6 +80,7 @@ func runDaemon() {
 		_, _ = fmt.Fprintln(output, "  laravel-waf-agent [daemon options]")
 		_, _ = fmt.Fprintln(output, "  laravel-waf-agent add-ip [options] <ip> <duration>")
 		_, _ = fmt.Fprintln(output, "  laravel-waf-agent remove-ip [options] <ip>")
+		_, _ = fmt.Fprintln(output, "  laravel-waf-agent list-ip [options]")
 		_, _ = fmt.Fprintln(output, "\nDaemon options:")
 		flag.PrintDefaults()
 	}
@@ -88,6 +96,14 @@ func runDaemon() {
 	}
 	if *reconcileEvery < 0 {
 		logger.Fatal("firewall reconcile interval cannot be negative")
+	}
+
+	blockStore, err := blocklist.NewFileStore(*stateFile)
+	if err != nil {
+		logger.Fatal(err)
+	}
+	if _, err := blockStore.List(); err != nil {
+		logger.Fatalf("initialize block state: %v", err)
 	}
 
 	sets, err := firewall.NewIPSetBackend(
@@ -201,6 +217,7 @@ func runDaemon() {
 			Secret:      secret,
 			MaxTTL:      *maxTTL,
 			Backend:     backend,
+			Store:       blockStore,
 			Metrics:     registry,
 			Logger:      logger,
 		}).ListenAndServe(ctx)
@@ -217,7 +234,14 @@ func runDaemon() {
 }
 
 func runControlCommand(args []string, stdout, stderr io.Writer) (bool, error) {
-	if len(args) == 0 || (args[0] != "add-ip" && args[0] != "remove-ip") {
+	if len(args) == 0 {
+		return false, nil
+	}
+
+	if args[0] == "list-ip" || args[0] == "list-ips" {
+		return runListCommand(args[1:], stdout, stderr)
+	}
+	if args[0] != "add-ip" && args[0] != "remove-ip" {
 		return false, nil
 	}
 
@@ -288,12 +312,83 @@ func runControlCommand(args []string, stdout, stderr io.Writer) (bool, error) {
 	}
 
 	if command == "add-ip" {
-		_, _ = fmt.Fprintf(stdout, "added %s to the block set for %s\n", decision.IP, (time.Duration(decision.TTLSeconds) * time.Second).String())
+		_, _ = fmt.Fprintf(stdout, "added %s to the block set for %s (reason: %s)\n", decision.IP, (time.Duration(decision.TTLSeconds) * time.Second).String(), decision.Reason)
 	} else {
 		_, _ = fmt.Fprintf(stdout, "removed %s from the block set\n", decision.IP)
 	}
 
 	return true, nil
+}
+
+func runListCommand(args []string, stdout, stderr io.Writer) (bool, error) {
+	flags := flag.NewFlagSet("list-ip", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	stateFile := flags.String("state-file", defaultBlockStateFile, "file storing active block reasons and expiries")
+	jsonOutput := flags.Bool("json", false, "print block records as JSON")
+	flags.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "Usage: laravel-waf-agent list-ip [options]")
+		_, _ = fmt.Fprintln(stderr)
+		flags.PrintDefaults()
+	}
+
+	if err := flags.Parse(args); err != nil {
+		return true, err
+	}
+	if flags.NArg() != 0 {
+		flags.Usage()
+
+		return true, fmt.Errorf("invalid arguments")
+	}
+
+	store, err := blocklist.NewFileStore(*stateFile)
+	if err != nil {
+		return true, err
+	}
+	records, err := store.List()
+	if err != nil {
+		return true, err
+	}
+
+	if *jsonOutput {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(records); err != nil {
+			return true, fmt.Errorf("encode block list: %w", err)
+		}
+
+		return true, nil
+	}
+
+	if len(records) == 0 {
+		_, _ = fmt.Fprintln(stdout, "no active blocked IPs")
+
+		return true, nil
+	}
+
+	writer := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	_, _ = fmt.Fprintln(writer, "IP\tREASON\tEXPIRES IN")
+	for _, record := range records {
+		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\n", record.IP, record.Reason, expiresIn(record.ExpiresAt))
+	}
+	if err := writer.Flush(); err != nil {
+		return true, fmt.Errorf("write block list: %w", err)
+	}
+
+	return true, nil
+}
+
+func expiresIn(expiresAt int64) string {
+	remaining := time.Until(time.Unix(expiresAt, 0))
+	if remaining <= 0 {
+		return "expired"
+	}
+
+	seconds := int64(remaining / time.Second)
+	if remaining%time.Second != 0 {
+		seconds++
+	}
+
+	return (time.Duration(seconds) * time.Second).String()
 }
 
 func parseTTL(value string) (int, error) {

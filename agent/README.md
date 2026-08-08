@@ -29,6 +29,11 @@ By default the agent creates its IPv4 and IPv6 sets and ensures that one static
 every block decision and every 30 seconds, restoring them if another firewall
 service has flushed them.
 
+Accepted block decisions are also recorded in
+`/var/lib/laravel-waf/blocks.json`. The record contains the normalized IP, the
+bounded reason from the decision, and its expiry time. The file is an audit and
+display ledger; `ipset` remains authoritative for enforcement.
+
 On upgrade, the agent removes the legacy set rules that dropped all incoming
 traffic before installing the web-only rules.
 
@@ -72,20 +77,41 @@ a duration in seconds or Go duration notation (`15m`, `2h`, or `24h`):
 sudo laravel-waf-agent add-ip 203.0.113.10 15m
 ```
 
+Add a reason with `--reason` (use letters, numbers, `_`, `.`, `:`, or `-`, up
+to 64 characters):
+
+```bash
+sudo laravel-waf-agent add-ip --reason manual_review 203.0.113.10 15m
+```
+
 Remove it before the duration expires with:
 
 ```bash
 sudo laravel-waf-agent remove-ip 203.0.113.10
 ```
 
-Both commands use `/run/laravel-waf/agent.sock` by default. Pass
+List active blocks and the reasons that were recorded when they were added:
+
+```bash
+sudo laravel-waf-agent list-ip
+```
+
+Use `--json` for scripts. If the daemon uses a non-default state file, pass the
+same path with `--state-file` to `list-ip` and as a daemon option. Expired
+records are omitted from the list and are pruned from the file on the next
+block update. Blocks inserted directly with `ipset` are not in the agent ledger
+and do not have an agent reason.
+
+The `add-ip` and `remove-ip` commands use `/run/laravel-waf/agent.sock` by
+default. Pass
 `--socket /another/path.sock` before the IP when the service uses a different
 socket. They automatically read `/etc/laravel-waf/agent.secret`; use
 `--secret-file /another/path` only when the running service uses a different
 secret file. For a service configured without HMAC authentication, pass
 `--secret-file=`. A block can last from one second to 24 hours, and may be
 further limited by the service's `--max-ttl` setting. Adding an existing address
-updates its expiry. Removing an address is safe even if it has already expired.
+updates its expiry and reason. Removing an address is safe even if it has
+already expired.
 
 ## Optional pre-application gate
 

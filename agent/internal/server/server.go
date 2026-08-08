@@ -26,12 +26,18 @@ type Backend interface {
 	Unblock(context.Context, net.IP) error
 }
 
+type BlockStore interface {
+	RecordBlock(net.IP, int, string) error
+	RemoveBlock(net.IP) error
+}
+
 type Server struct {
 	Socket      string
 	SocketGroup string
 	Secret      []byte
 	MaxTTL      int
 	Backend     Backend
+	Store       BlockStore
 	Metrics     *metrics.Registry
 	Logger      *log.Logger
 }
@@ -124,14 +130,23 @@ func (s *Server) handle(connection net.Conn) {
 
 	operation := "block"
 	var err error
+	stateErr := false
 	operationContext, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	if decision.Action == "block_ip" {
 		err = s.Backend.Block(operationContext, ip, decision.TTLSeconds)
+		if err == nil && s.Store != nil {
+			err = s.Store.RecordBlock(ip, decision.TTLSeconds, decision.Reason)
+			stateErr = err != nil
+		}
 	} else {
 		operation = "unblock"
 		err = s.Backend.Unblock(operationContext, ip)
+		if err == nil && s.Store != nil {
+			err = s.Store.RemoveBlock(ip)
+			stateErr = err != nil
+		}
 	}
 
 	family := "ipv6"
@@ -142,7 +157,11 @@ func (s *Server) handle(connection net.Conn) {
 	if err != nil {
 		s.Metrics.Decision(decision.Action, "backend_error")
 		s.Metrics.Operation(operation, "error", family)
-		writeError(connection, "firewall backend error")
+		if stateErr {
+			writeError(connection, "block state error")
+		} else {
+			writeError(connection, "firewall backend error")
+		}
 		return
 	}
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BillingServ/laravel-waf/agent/internal/blocklist"
 	"github.com/BillingServ/laravel-waf/agent/internal/protocol"
 )
 
@@ -23,6 +24,7 @@ func TestRunAddIPCommand(t *testing.T) {
 		"add-ip",
 		"--socket", socket,
 		"--secret-file=",
+		"--reason", "manual_review",
 		"203.0.113.10",
 		"15m",
 	}, stdout, stderr)
@@ -37,11 +39,38 @@ func TestRunAddIPCommand(t *testing.T) {
 	if result.err != nil {
 		t.Fatal(result.err)
 	}
-	if result.decision.Action != "block_ip" || result.decision.IP != "203.0.113.10" || result.decision.TTLSeconds != 900 {
+	if result.decision.Action != "block_ip" || result.decision.IP != "203.0.113.10" || result.decision.TTLSeconds != 900 || result.decision.Reason != "manual_review" {
 		t.Fatalf("unexpected decision: %#v", result.decision)
 	}
 	if !strings.Contains(stdout.String(), "15m0s") {
 		t.Fatalf("unexpected command output: %q", stdout.String())
+	}
+}
+
+func TestRunListIPCommandShowsReason(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "blocks.json")
+	store, err := blocklist.NewFileStore(stateFile)
+	if err != nil {
+		t.Fatalf("create block store: %v", err)
+	}
+	if err := store.RecordBlock(net.ParseIP("203.0.113.10"), 900, "rule_sql_injection"); err != nil {
+		t.Fatalf("record block: %v", err)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	handled, err := runControlCommand([]string{
+		"list-ip",
+		"--state-file", stateFile,
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run list command: %v (stderr: %s)", err, stderr.String())
+	}
+	if !handled {
+		t.Fatal("expected list command to be handled")
+	}
+	if !strings.Contains(stdout.String(), "203.0.113.10") || !strings.Contains(stdout.String(), "rule_sql_injection") {
+		t.Fatalf("expected IP and reason in output: %q", stdout.String())
 	}
 }
 

@@ -1,12 +1,12 @@
 [Unit]
-Description=Laravel WAF ipset decision agent
+Description=LWAFD firewall decision daemon
 After=network-online.target firewall.service
 Wants=network-online.target firewall.service
 PartOf=firewall.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/laravel-waf-agent --socket /run/laravel-waf/agent.sock --socket-group www-data --secret-file /etc/laravel-waf/agent.secret --block-tcp-ports 80,443
+ExecStart=/usr/local/bin/lwafd --socket /run/laravel-waf/agent.sock --socket-group www-data --secret-file /etc/laravel-waf/agent.secret --block-tcp-ports 80,443
 Restart=on-failure
 RestartSec=5s
 User=root

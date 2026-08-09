@@ -1,6 +1,6 @@
-# laravel-waf-agent
+# LWAFD
 
-`laravel-waf-agent` is an optional Linux service for the Laravel WAF. It receives high-confidence, short-lived IP block decisions over a local Unix socket, updates expiring `ipset` sets, and attaches those sets to TCP ports 80 and 443 in the host INPUT chains. An opt-in second Unix socket can act as an Nginx traffic-pressure gate before PHP.
+LWAFD (`lwafd`, short for Laravel WAF daemon) is an optional Linux service for the Laravel WAF. It receives high-confidence, short-lived IP block decisions over a local Unix socket, updates expiring `ipset` sets, and attaches those sets to TCP ports 80 and 443 in the host INPUT chains. An opt-in second Unix socket can act as an Nginx traffic-pressure gate before PHP.
 
 By default it intentionally does not:
 
@@ -17,8 +17,19 @@ pages or process ALTCHA proofs. Laravel retains those responsibilities.
 
 ```bash
 go test ./...
-go build -o bin/laravel-waf-agent ./cmd/laravel-waf-agent
+./build.sh
 ```
+
+The build script writes a stripped, static Linux AMD64 executable to
+`bin/lwafd`. Override the standard Go target variables when building for
+another Linux architecture:
+
+```bash
+GOARCH=arm64 ./build.sh
+```
+
+Set `BINARY_NAME` to choose a different executable name without changing the
+source.
 
 The agent is Linux-only because it invokes `ipset`.
 
@@ -60,7 +71,7 @@ the periodic check.
 ## Run
 
 ```bash
-sudo ./bin/laravel-waf-agent \
+sudo ./bin/lwafd \
   --socket /run/laravel-waf/agent.sock \
   --socket-group www-data \
   --secret-file /etc/laravel-waf/agent.secret
@@ -77,26 +88,26 @@ existing Unix socket. Add an IPv4 or IPv6 address to the block set by providing
 a duration in seconds or Go duration notation (`15m`, `2h`, or `24h`):
 
 ```bash
-sudo laravel-waf-agent add-ip 203.0.113.10 15m
+sudo lwafd add-ip 203.0.113.10 15m
 ```
 
 Add a reason with `--reason` (use letters, numbers, `_`, `.`, `:`, or `-`, up
 to 64 characters):
 
 ```bash
-sudo laravel-waf-agent add-ip --reason manual_review 203.0.113.10 15m
+sudo lwafd add-ip --reason manual_review 203.0.113.10 15m
 ```
 
 Remove it before the duration expires with:
 
 ```bash
-sudo laravel-waf-agent remove-ip 203.0.113.10
+sudo lwafd remove-ip 203.0.113.10
 ```
 
 List active blocks and the reasons that were recorded when they were added:
 
 ```bash
-sudo laravel-waf-agent list-ip
+sudo lwafd list-ip
 ```
 
 Use `--json` for scripts. If the daemon uses a non-default state file, pass the
@@ -121,7 +132,7 @@ already expired.
 Gate mode is enabled only when `--gate-socket` is set:
 
 ```bash
-sudo ./bin/laravel-waf-agent \
+sudo ./bin/lwafd \
   --socket /run/laravel-waf/agent.sock \
   --socket-group www-data \
   --secret-file /etc/laravel-waf/agent.secret \

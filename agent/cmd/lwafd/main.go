@@ -32,6 +32,8 @@ const (
 	defaultBlockStateFile    = "/var/lib/laravel-waf/blocks.json"
 )
 
+var programName = "lwafd"
+
 func main() {
 	handled, err := runControlCommand(os.Args[1:], os.Stdout, os.Stderr)
 	if handled {
@@ -39,7 +41,7 @@ func main() {
 			return
 		}
 
-		_, _ = fmt.Fprintf(os.Stderr, "laravel-waf-agent: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "%s: %v\n", programName, err)
 		os.Exit(1)
 	}
 
@@ -77,16 +79,16 @@ func runDaemon() {
 	flag.Usage = func() {
 		output := flag.CommandLine.Output()
 		_, _ = fmt.Fprintln(output, "Usage:")
-		_, _ = fmt.Fprintln(output, "  laravel-waf-agent [daemon options]")
-		_, _ = fmt.Fprintln(output, "  laravel-waf-agent add-ip [options] <ip> <duration>")
-		_, _ = fmt.Fprintln(output, "  laravel-waf-agent remove-ip [options] <ip>")
-		_, _ = fmt.Fprintln(output, "  laravel-waf-agent list-ip [options]")
+		_, _ = fmt.Fprintf(output, "  %s [daemon options]\n", programName)
+		_, _ = fmt.Fprintf(output, "  %s add-ip [options] <ip> <duration>\n", programName)
+		_, _ = fmt.Fprintf(output, "  %s remove-ip [options] <ip>\n", programName)
+		_, _ = fmt.Fprintf(output, "  %s list-ip [options]\n", programName)
 		_, _ = fmt.Fprintln(output, "\nDaemon options:")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
-	logger := log.New(os.Stdout, "laravel-waf-agent ", log.LstdFlags)
+	logger := log.New(os.Stdout, programName+" ", log.LstdFlags)
 	secret, err := readSecret(*secretFile)
 	if err != nil {
 		logger.Fatal(err)
@@ -248,9 +250,9 @@ func runControlCommand(args []string, stdout, stderr io.Writer) (bool, error) {
 	reason := flags.String("reason", "manual", "bounded reason recorded for the decision")
 	flags.Usage = func() {
 		if command == "add-ip" {
-			_, _ = fmt.Fprintf(stderr, "Usage: laravel-waf-agent add-ip [options] <ip> <duration>\n\nDuration accepts seconds or Go duration notation such as 15m or 2h.\n\n")
+			_, _ = fmt.Fprintf(stderr, "Usage: %s add-ip [options] <ip> <duration>\n\nDuration accepts seconds or Go duration notation such as 15m or 2h.\n\n", programName)
 		} else {
-			_, _ = fmt.Fprintf(stderr, "Usage: laravel-waf-agent remove-ip [options] <ip>\n\n")
+			_, _ = fmt.Fprintf(stderr, "Usage: %s remove-ip [options] <ip>\n\n", programName)
 		}
 		flags.PrintDefaults()
 	}
@@ -320,7 +322,7 @@ func runListCommand(args []string, stdout, stderr io.Writer) (bool, error) {
 	stateFile := flags.String("state-file", defaultBlockStateFile, "file storing active block reasons and expiries")
 	jsonOutput := flags.Bool("json", false, "print block records as JSON")
 	flags.Usage = func() {
-		_, _ = fmt.Fprintln(stderr, "Usage: laravel-waf-agent list-ip [options]")
+		_, _ = fmt.Fprintf(stderr, "Usage: %s list-ip [options]\n", programName)
 		_, _ = fmt.Fprintln(stderr)
 		flags.PrintDefaults()
 	}

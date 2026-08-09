@@ -64,9 +64,9 @@ Build and test the agent, then add the gate flags to its service:
 ```bash
 cd agent
 go test ./...
-go build -o bin/laravel-waf-agent ./cmd/laravel-waf-agent
+./build.sh
 
-sudo ./bin/laravel-waf-agent \
+sudo ./bin/lwafd \
   --socket /run/laravel-waf/agent.sock \
   --socket-group www-data \
   --secret-file /etc/laravel-waf/agent.secret \

@@ -1,0 +1,77 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  php:
+    name: PHP ${{ matrix.php }} / Laravel ${{ matrix.laravel }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - php: '8.2'
+            laravel: '10'
+            testbench: '^8.0'
+            phpunit: '^10.0'
+          - php: '8.2'
+            laravel: '11'
+            testbench: '^9.1'
+            phpunit: '^10.0|^11.0'
+          - php: '8.3'
+            laravel: '12'
+            testbench: '^10.0'
+            phpunit: '^11.0'
+          - php: '8.4'
+            laravel: '13'
+            testbench: '^11.0'
+            phpunit: '^12.0'
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer:v2
+          coverage: none
+        env:
+          fail-fast: true
+      - name: Select Laravel test matrix
+        run: >-
+          composer require --dev
+          "orchestra/testbench:${{ matrix.testbench }}"
+          "phpunit/phpunit:${{ matrix.phpunit }}"
+          --no-update --no-interaction
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+      - name: Validate package metadata
+        run: composer validate --strict --no-check-publish
+      - name: Check PHP syntax
+        run: composer lint
+      - name: Run PHP tests
+        run: composer test -- --do-not-cache-result
+
+  go:
+    name: Go agent
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.mod
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...

@@ -2,10 +2,10 @@
 
 namespace BillingServ\LaravelWaf\Security;
 
-use BillingServ\LaravelWaf\Contracts\DecisionSink;
-use BillingServ\LaravelWaf\Security\Finding;
+use BillingServ\LaravelWaf\Support\AgentBlocker;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
+use BillingServ\LaravelWaf\Support\RequestContext;
 use BillingServ\LaravelWaf\Support\SecurityNotifier;
 use Illuminate\Auth\Events\Failed;
 use Illuminate\Auth\Events\Lockout;
@@ -20,7 +20,7 @@ final class LoginProtectionSubscriber
 {
     public function __construct(
         private readonly RateLimiter $limiter,
-        private readonly DecisionSink $decisions,
+        private readonly AgentBlocker $agentBlocker,
         private readonly MetricsRecorder $metrics,
         private readonly SecurityNotifier $notifier,
         private readonly LoggerInterface $logger,
@@ -47,7 +47,7 @@ final class LoginProtectionSubscriber
 
         $ip = $request->ip() ?: 'unknown';
         $identifier = $this->identifier($request, $event->credentials);
-        $route = $this->routeName($request);
+        $route = RequestContext::routeLabel($request);
         $finding = $this->finding($request, 'failed_login', 'auth');
 
         try {
@@ -60,8 +60,14 @@ final class LoginProtectionSubscriber
             $this->metrics->finding($finding, 'observe');
             $this->notifier->notify($finding);
 
-            if ($attempts >= max(1, (int) config('laravel-waf.login.block_after_attempts', 10))) {
-                $this->maybeBlock($ip);
+            if ($attempts >= max(1, (int) config('laravel-waf.login.block_after_attempts', 10))
+                && config('laravel-waf.login.auto_block', false)) {
+                $this->agentBlocker->block(
+                    $ip,
+                    (int) config('laravel-waf.login.block_ttl_seconds', 900),
+                    'login_failure',
+                    'login',
+                );
             }
         } catch (Throwable $exception) {
             $this->metrics->error('login_failure_handler');
@@ -88,14 +94,12 @@ final class LoginProtectionSubscriber
         $this->notifier->notify($finding);
 
         if (config('laravel-waf.login.auto_block', false)) {
-            try {
-                $this->maybeBlock($finding->ip);
-            } catch (Throwable $exception) {
-                $this->metrics->error('login_agent_decision');
-                $this->warning('Laravel WAF login block decision failed.', [
-                    'exception' => $exception::class,
-                ]);
-            }
+            $this->agentBlocker->block(
+                $finding->ip,
+                (int) config('laravel-waf.login.block_ttl_seconds', 900),
+                'login_failure',
+                'login',
+            );
         }
     }
 
@@ -137,28 +141,6 @@ final class LoginProtectionSubscriber
         return is_scalar($value) ? (string) $value : '';
     }
 
-    private function maybeBlock(string $ip): void
-    {
-        if (!config('laravel-waf.login.auto_block', false)
-            || !config('laravel-waf.agent.enabled', false)
-            || filter_var($ip, FILTER_VALIDATE_IP) === false) {
-            return;
-        }
-
-        $cooldownKey = RateLimitKey::securityBlock($ip, 'login');
-        $cooldown = max(1, (int) config('laravel-waf.agent.block_cooldown_seconds', 60));
-        if ($this->limiter->tooManyAttempts($cooldownKey, 1)) {
-            return;
-        }
-
-        $this->limiter->hit($cooldownKey, $cooldown);
-        $this->decisions->block(
-            $ip,
-            max(1, (int) config('laravel-waf.login.block_ttl_seconds', 900)),
-            'login_failure',
-        );
-    }
-
     private function finding(Request $request, string $rule, string $source): Finding
     {
         return new Finding(
@@ -168,8 +150,8 @@ final class LoginProtectionSubscriber
             $source,
             null,
             $request->ip() ?: 'unknown',
-            $this->routeName($request),
-            strtoupper(substr($request->getMethod(), 0, 16)),
+            RequestContext::routeLabel($request),
+            RequestContext::method($request),
         );
     }
 
@@ -195,16 +177,6 @@ final class LoginProtectionSubscriber
 
         return !is_array($guards) || $guards === [] || in_array($guard, $guards, true);
     }
-
-    private function routeName(Request $request): string
-    {
-        $route = $request->route();
-
-        return is_object($route) && method_exists($route, 'getName')
-            ? substr(preg_replace('/[^A-Za-z0-9_.:-]/', '_', (string) ($route->getName() ?: 'unnamed')) ?: 'unnamed', 0, 64)
-            : 'unnamed';
-    }
-
     /** @param array<string, string> $context */
     private function warning(string $message, array $context): void
     {

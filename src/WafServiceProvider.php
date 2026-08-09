@@ -2,15 +2,17 @@
 
 namespace BillingServ\LaravelWaf;
 
+use BillingServ\LaravelWaf\Contracts\AgentMetricsSource;
 use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
 use BillingServ\LaravelWaf\Contracts\ChallengeVerifier;
 use BillingServ\LaravelWaf\Contracts\DecisionSink;
 use BillingServ\LaravelWaf\Contracts\GeoIpResolver;
 use BillingServ\LaravelWaf\Contracts\InspectionRule;
+use BillingServ\LaravelWaf\Contracts\MetricsRenderer;
 use BillingServ\LaravelWaf\Contracts\MetricsSink;
 use BillingServ\LaravelWaf\Contracts\NotificationSink;
-use BillingServ\LaravelWaf\Http\Middleware\LoginProtection;
 use BillingServ\LaravelWaf\Http\Middleware\DdosProtection;
+use BillingServ\LaravelWaf\Http\Middleware\LoginProtection;
 use BillingServ\LaravelWaf\Http\Middleware\RequestInspection;
 use BillingServ\LaravelWaf\Http\Middleware\WafProtection;
 use BillingServ\LaravelWaf\Http\Responses\AltchaChallengeResponder;
@@ -32,9 +34,11 @@ use BillingServ\LaravelWaf\Security\Rules\SqlInjectionRule;
 use BillingServ\LaravelWaf\Security\Rules\SsrfRule;
 use BillingServ\LaravelWaf\Security\Rules\TemplateInjectionRule;
 use BillingServ\LaravelWaf\Security\Rules\XssRule;
+use BillingServ\LaravelWaf\Support\AgentBlocker;
 use BillingServ\LaravelWaf\Support\AltchaVerifier;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\LaravelNotificationSink;
+use BillingServ\LaravelWaf\Support\LoopbackAgentMetricsSource;
 use BillingServ\LaravelWaf\Support\MaxMindGeoIpResolver;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\NullChallengeVerifier;
@@ -43,6 +47,7 @@ use BillingServ\LaravelWaf\Support\NullGeoIpResolver;
 use BillingServ\LaravelWaf\Support\NullMetricsSink;
 use BillingServ\LaravelWaf\Support\OutboundUrlGuard;
 use BillingServ\LaravelWaf\Support\PrometheusMetricsSink;
+use BillingServ\LaravelWaf\Support\PrometheusRegistryRenderer;
 use BillingServ\LaravelWaf\Support\SecurityHeaders;
 use BillingServ\LaravelWaf\Support\SecurityNotifier;
 use BillingServ\LaravelWaf\Support\UnixSocketDecisionSink;
@@ -83,6 +88,13 @@ final class WafServiceProvider extends ServiceProvider
 
         $this->app->singleton(MetricsRecorder::class, fn ($app): MetricsRecorder => new MetricsRecorder(
             $app->make(MetricsSink::class),
+        ));
+
+        $this->app->singleton(MetricsRenderer::class, static fn (): MetricsRenderer => new PrometheusRegistryRenderer());
+        $this->app->singleton(AgentMetricsSource::class, static fn (): AgentMetricsSource => new LoopbackAgentMetricsSource(
+            (string) config('laravel-waf.metrics.agent.endpoint', 'http://127.0.0.1:9919/metrics'),
+            (int) config('laravel-waf.metrics.agent.timeout_ms', 100),
+            (int) config('laravel-waf.metrics.agent.max_response_bytes', 1048576),
         ));
 
         $this->app->singleton(RequestInputCollector::class, static fn (): RequestInputCollector => new RequestInputCollector());
@@ -201,6 +213,13 @@ final class WafServiceProvider extends ServiceProvider
                 $app->make(MetricsRecorder::class),
             );
         });
+
+        $this->app->bind(AgentBlocker::class, fn ($app): AgentBlocker => new AgentBlocker(
+            $app->make(RateLimiter::class),
+            $app->make(DecisionSink::class),
+            $app->make(MetricsRecorder::class),
+            $app->make(LoggerInterface::class),
+        ));
 
         $this->app->singleton(ChallengeResponder::class, function ($app): ChallengeResponder {
             $title = (string) config('laravel-waf.challenge.title', 'Additional verification required');

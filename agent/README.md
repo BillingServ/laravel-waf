@@ -33,6 +33,9 @@ Accepted block decisions are also recorded in
 `/var/lib/laravel-waf/blocks.json`. The record contains the normalized IP, the
 bounded reason from the decision, and its expiry time. The file is an audit and
 display ledger; `ipset` remains authoritative for enforcement.
+If the ledger cannot be initialized or updated, the agent logs a warning and
+continues enforcing successful firewall operations. `list-ip` may be incomplete
+until the state-file problem is corrected.
 
 On upgrade, the agent removes the legacy set rules that dropped all incoming
 traffic before installing the web-only rules.
@@ -63,7 +66,7 @@ sudo ./bin/laravel-waf-agent \
   --secret-file /etc/laravel-waf/agent.secret
 ```
 
-The socket group must match the PHP-FPM process group. The secret file is optional but recommended. It must match `LARAVEL_WAF_AGENT_SECRET` in the Laravel application. The metrics listener binds to loopback by default at `127.0.0.1:9919`.
+The socket group must match the PHP-FPM process group. The secret file is optional but recommended. It must match `LARAVEL_WAF_AGENT_SECRET` in the Laravel application. The metrics listener binds to loopback by default at `127.0.0.1:9919`; the Laravel `/prometheus` endpoint can collect it so Prometheus needs only one protected scrape target.
 
 Use `--dry-run` while validating the integration. Start with `LARAVEL_WAF_AGENT_AUTO_BLOCK=false`; automatic host blocks should only be enabled after the application's IP and proxy configuration have been verified. When the host also runs a firewall service that rebuilds INPUT, order this service after it so the initial rules are attached last.
 

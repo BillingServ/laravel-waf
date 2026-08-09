@@ -4,6 +4,7 @@ namespace BillingServ\LaravelWaf\Security\Rules;
 
 use BillingServ\LaravelWaf\Contracts\InspectionRule;
 use BillingServ\LaravelWaf\Security\Finding;
+use BillingServ\LaravelWaf\Support\RequestContext;
 use Illuminate\Http\Request;
 
 final class RoutePolicyRule implements InspectionRule
@@ -61,10 +62,7 @@ final class RoutePolicyRule implements InspectionRule
             return null;
         }
 
-        $route = $request->route();
-        $name = is_object($route) && method_exists($route, 'getName')
-            ? (string) ($route->getName() ?: 'unnamed')
-            : 'unnamed';
+        $name = RequestContext::routeName($request);
         $policy = $routes[$name] ?? $routes['*'] ?? null;
 
         return is_array($policy) ? $policy : null;
@@ -192,11 +190,6 @@ final class RoutePolicyRule implements InspectionRule
 
     private function finding(Request $request, string $rule): Finding
     {
-        $route = $request->route();
-        $name = is_object($route) && method_exists($route, 'getName')
-            ? (string) ($route->getName() ?: 'unnamed')
-            : 'unnamed';
-
         return new Finding(
             'policy',
             $rule,
@@ -204,8 +197,8 @@ final class RoutePolicyRule implements InspectionRule
             'route',
             null,
             $request->ip() ?: 'unknown',
-            substr(preg_replace('/[^A-Za-z0-9_.:-]/', '_', $name) ?: 'unnamed', 0, 64),
-            strtoupper(substr($request->getMethod(), 0, 16)),
+            RequestContext::routeLabel($request),
+            RequestContext::method($request),
         );
     }
 }

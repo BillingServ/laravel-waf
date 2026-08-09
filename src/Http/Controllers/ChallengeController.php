@@ -3,6 +3,7 @@
 namespace BillingServ\LaravelWaf\Http\Controllers;
 
 use BillingServ\LaravelWaf\Contracts\ChallengeVerifier;
+use BillingServ\LaravelWaf\Http\Responses\BlockedResponse;
 use BillingServ\LaravelWaf\Http\Responses\ChallengePage;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
@@ -105,25 +106,11 @@ final class ChallengeController
 
     public function blocked(Request $request): Response
     {
-        $headers = [
-            'Cache-Control' => 'no-store',
-            'X-Laravel-Waf-Blocked' => 'true',
-        ];
-
-        if ($request->expectsJson()) {
-            return new JsonResponse([
-                'message' => 'Request blocked.',
-                'blocked' => true,
-            ], 403, $headers);
-        }
-
-        $body = ChallengePage::blocked(
-            (string) config('laravel-waf.challenge.blocked_title', 'Request blocked'),
-            (string) config('laravel-waf.challenge.blocked_message', 'This request was blocked by the site security policy.'),
+        return BlockedResponse::make(
+            $request,
+            includeBlockedFlag: true,
+            supportLivewire: false,
         );
-        $headers['Content-Type'] = 'text/html; charset=UTF-8';
-
-        return new Response($body, 403, $headers);
     }
 
     private function field(): string

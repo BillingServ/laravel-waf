@@ -4,6 +4,7 @@ namespace BillingServ\LaravelWaf\Http\Middleware;
 
 use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
+use BillingServ\LaravelWaf\Support\RequestContext;
 use Closure;
 use Illuminate\Cache\RateLimiter;
 use Illuminate\Http\JsonResponse;
@@ -39,7 +40,7 @@ final class LoginProtection
                     $this->limiter->availableIn($identityKey),
                     $this->limiter->availableIn($ipKey),
                 );
-                $this->metrics->decision('login_rate_limited', 'login', $this->routeName($request));
+                $this->metrics->decision('login_rate_limited', 'login', RequestContext::routeName($request));
 
                 return $this->blocked($request, $retryAfter);
             }
@@ -79,14 +80,5 @@ final class LoginProtection
         $value = is_string($field) && $field !== '' ? $request->input($field) : $request->input('email');
 
         return is_scalar($value) ? (string) $value : '';
-    }
-
-    private function routeName(Request $request): string
-    {
-        $route = $request->route();
-
-        return is_object($route) && method_exists($route, 'getName')
-            ? (string) ($route->getName() ?: 'unnamed')
-            : 'unnamed';
     }
 }

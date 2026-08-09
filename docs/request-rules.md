@@ -44,8 +44,9 @@ LARAVEL_WAF_SQLI_ACTION=reject
 
 `challenge` requires `LARAVEL_WAF_CHALLENGE_ENABLED=true`; otherwise the
 finding is rejected. Use `log` while tuning exclusions or custom application
-inputs. The default response is a generic 403 and deliberately does not reveal
-which rule matched.
+inputs. Log-only findings never issue an automatic host-agent block, even when
+`LARAVEL_WAF_AGENT_AUTO_BLOCK_ON_FINDING=true`. The default response is a
+generic 403 and deliberately does not reveal which rule matched.
 
 Exclusions are configured in the published file:
 

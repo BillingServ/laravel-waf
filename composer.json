@@ -65,7 +65,17 @@
     },
     "scripts": {
         "test": "vendor/bin/phpunit",
-        "lint": "find src tests -name '*.php' -print0 | xargs -0 -n1 php -l"
+        "lint": "find src tests config routes -name '*.php' -print0 | xargs -0 -n1 php -l",
+        "go-check": [
+            "cd agent && test -z \"$(gofmt -l .)\"",
+            "cd agent && go vet ./...",
+            "cd agent && go test ./..."
+        ],
+        "check": [
+            "@lint",
+            "@test",
+            "@go-check"
+        ]
     },
     "config": {
         "sort-packages": true

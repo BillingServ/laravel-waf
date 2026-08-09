@@ -28,7 +28,7 @@ final class AltchaChallengeResponder implements ChallengeResponder
         ];
 
         if ($scope === 'test') {
-            return $this->blocked($request);
+            return BlockedResponse::make($request, includeBlockedFlag: true, scope: 'test');
         }
 
         $field = $this->field();
@@ -68,66 +68,6 @@ final class AltchaChallengeResponder implements ChallengeResponder
 
         return new Response($body, $this->status, $headers);
     }
-
-    private function failed(Request $request): Response
-    {
-        $headers = [
-            'Cache-Control' => 'no-store',
-            'X-Laravel-Waf-Challenge' => 'failed',
-        ];
-
-        if ($request->expectsJson()) {
-            return new JsonResponse([
-                'message' => 'Challenge verification failed.',
-                'challenge' => false,
-                'provider' => 'altcha',
-                'verification_failed' => true,
-                'scope' => 'test',
-            ], 422, $headers);
-        }
-
-        $retryUrl = $request->attributes->get('laravel-waf.challenge_return_to');
-        $body = ChallengePage::failed(
-            (string) config('laravel-waf.challenge.failure_title', 'Verification failed'),
-            (string) config('laravel-waf.challenge.failure_message', 'We could not confirm this request. Please try again.'),
-            is_string($retryUrl) ? $retryUrl : null,
-        );
-        $headers['Content-Type'] = 'text/html; charset=UTF-8';
-
-        return new Response($body, 422, $headers);
-    }
-
-    private function blocked(Request $request): Response
-    {
-        $headers = [
-            'Cache-Control' => 'no-store',
-            'X-Laravel-Waf-Blocked' => 'true',
-        ];
-
-        $livewire = LivewireResponse::blocked($request, $headers);
-        if ($livewire !== null) {
-            return $livewire;
-        }
-
-        if ($request->expectsJson()) {
-            return new JsonResponse([
-                'message' => 'Request blocked.',
-                'blocked' => true,
-                'scope' => 'test',
-            ], 403, $headers);
-        }
-
-        $retryUrl = $request->attributes->get('laravel-waf.challenge_return_to');
-        $body = ChallengePage::blocked(
-            (string) config('laravel-waf.challenge.blocked_title', 'Request blocked'),
-            (string) config('laravel-waf.challenge.blocked_message', 'This request was blocked by the site security policy.'),
-            is_string($retryUrl) ? $retryUrl : null,
-        );
-        $headers['Content-Type'] = 'text/html; charset=UTF-8';
-
-        return new Response($body, 403, $headers);
-    }
-
     private function widget(string $challengeUrl, string $field): string
     {
         $attribute = config('laravel-waf.challenge.altcha.challenge_attribute', 'challengeurl');

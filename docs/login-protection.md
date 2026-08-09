@@ -20,7 +20,9 @@ dispatcher is available:
 The identifier is hashed into cache keys. Credentials are not logged, stored,
 sent to notifications, or added to metrics.
 
-Useful settings in `config/laravel-waf.php` include:
+The defaults already provide the limits shown below, so they do not need to be
+copied into `.env`. `LARAVEL_WAF_PRESET=balanced` additionally enables the
+automatic agent block. Granular overrides remain available when needed:
 
 ```dotenv
 LARAVEL_WAF_LOGIN_ENABLED=true

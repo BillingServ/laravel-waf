@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -71,6 +72,23 @@ func TestRunListIPCommandShowsReason(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "203.0.113.10") || !strings.Contains(stdout.String(), "rule_sql_injection") {
 		t.Fatalf("expected IP and reason in output: %q", stdout.String())
+	}
+}
+
+func TestOpenBlockStoreTreatsTheAuditLedgerAsOptional(t *testing.T) {
+	logs := &bytes.Buffer{}
+	logger := log.New(logs, "", 0)
+
+	if store := openBlockStore("relative/blocks.json", logger); store != nil {
+		t.Fatal("expected an invalid state path to disable the audit ledger")
+	}
+	if !strings.Contains(logs.String(), "block state ledger disabled") {
+		t.Fatalf("expected a visible warning, got %q", logs.String())
+	}
+
+	stateFile := filepath.Join(t.TempDir(), "blocks.json")
+	if store := openBlockStore(stateFile, logger); store == nil {
+		t.Fatal("expected a valid state path to keep the audit ledger enabled")
 	}
 }
 

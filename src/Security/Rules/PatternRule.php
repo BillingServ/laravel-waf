@@ -6,6 +6,7 @@ use BillingServ\LaravelWaf\Contracts\InspectionRule;
 use BillingServ\LaravelWaf\Security\Finding;
 use BillingServ\LaravelWaf\Security\InputNormalizer;
 use BillingServ\LaravelWaf\Security\RequestInputCollector;
+use BillingServ\LaravelWaf\Support\RequestContext;
 use Illuminate\Http\Request;
 
 abstract class PatternRule implements InspectionRule
@@ -33,8 +34,8 @@ abstract class PatternRule implements InspectionRule
                         $input->source,
                         $this->field($input->field),
                         $request->ip() ?: 'unknown',
-                        $this->route($request),
-                        strtoupper(substr($request->getMethod(), 0, 16)),
+                        RequestContext::routeLabel($request),
+                        RequestContext::method($request),
                     );
                 }
             }
@@ -85,16 +86,5 @@ abstract class PatternRule implements InspectionRule
         $field = preg_replace('/[^A-Za-z0-9_.:-]/', '_', $field) ?: 'value';
 
         return substr($field, 0, 128);
-    }
-
-    private function route(Request $request): string
-    {
-        $route = $request->route();
-
-        if (is_object($route) && method_exists($route, 'getName')) {
-            return substr(preg_replace('/[^A-Za-z0-9_.:-]/', '_', (string) ($route->getName() ?: 'unnamed')) ?: 'unnamed', 0, 64);
-        }
-
-        return 'unnamed';
     }
 }

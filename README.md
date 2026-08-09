@@ -65,6 +65,31 @@ another shared store when running multiple PHP workers or application servers.
 
 ## Configuration
 
+For the recommended ALTCHA deployment, the long list of tuning variables can
+be replaced with:
+
+```dotenv
+LARAVEL_WAF_PRESET=balanced
+LARAVEL_WAF_AGENT_ENABLED=true
+LARAVEL_WAF_AGENT_SECRET=replace-with-a-new-random-secret
+LARAVEL_WAF_METRICS_ENABLED=true
+LARAVEL_WAF_METRICS_ALLOWED_IPS=replace-with-prometheus-tailscale-ip
+```
+
+`balanced` enables the automatic ALTCHA challenge flow, adaptive traffic
+pressure, reject-mode request and behaviour rules, and automatic login,
+rate-limit, and finding block decisions. The agent itself and the metrics
+route remain explicit because they require local infrastructure and access
+controls. Existing `ALTCHA_CHALLENGE_URL` and `ALTCHA_HMAC_KEY` values are
+reused; set their `LARAVEL_WAF_ALTCHA_*` equivalents only when the WAF needs a
+separate integration.
+
+The default `standard` preset preserves the package's existing conservative
+defaults. Any granular `LARAVEL_WAF_*` variable continues to override its
+preset value, so remove the redundant entries when adopting the preset and
+keep only deliberate exceptions. Published config remains available for
+application-specific tuning.
+
 - [`docs/request-rules.md`](docs/request-rules.md): request rules, actions, exclusions, and GeoIP.
 - [`docs/login-protection.md`](docs/login-protection.md): login middleware and authentication events.
 - [`docs/notifications.md`](docs/notifications.md): email, Slack, and custom notification sinks.
@@ -92,8 +117,10 @@ Prometheus support is optional:
 composer require promphp/prometheus_client_php
 ```
 
-Enable the metrics route only behind Nginx allowlisting or authentication. Do
-not expose it publicly by default. See [`docs/metrics.md`](docs/metrics.md).
+When metrics are enabled, Prometheus scrapes one configurable `/prometheus`
+endpoint containing both Laravel and loopback agent metrics. Restrict it to the
+Prometheus server's Tailscale IP or CIDR and keep the agent listener bound to
+loopback. See [`docs/metrics.md`](docs/metrics.md).
 
 Metric labels are bounded: IP addresses, URLs, query strings, headers, user
 IDs, request bodies, and attack payloads are not used as labels.
@@ -101,6 +128,14 @@ IDs, request bodies, and attack payloads are not used as labels.
 ## Security
 
 Please review [`SECURITY.md`](SECURITY.md) before reporting a vulnerability.
+
+## Development
+
+Run the complete PHP and Go verification suite from the repository root:
+
+```bash
+composer check
+```
 
 ## License
 

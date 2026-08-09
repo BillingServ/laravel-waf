@@ -9,10 +9,7 @@ upstream DDoS protection.
 The package reads the existing bsv211 variables by default:
 
 ```dotenv
-LARAVEL_WAF_DDOS_MODE=challenge
-LARAVEL_WAF_CHALLENGE_ENABLED=true
-LARAVEL_WAF_CHALLENGE_PROVIDER=altcha
-LARAVEL_WAF_CHALLENGE_PATH=_waf/challenge/verify
+LARAVEL_WAF_PRESET=balanced
 
 ALTCHA_CHALLENGE_URL=https://example.test/altcha/challenge
 ALTCHA_HMAC_KEY=replace-with-the-same-secret-used-by-the-challenge-endpoint
@@ -42,7 +39,9 @@ LARAVEL_WAF_CHALLENGE_THEME=auto
 LARAVEL_WAF_CHALLENGE_COOKIE_SECURE=auto
 ```
 
-For an automatic Anubis-style proof-of-work interstitial, use:
+The `balanced` preset uses an automatic Anubis-style proof-of-work
+interstitial. These granular values remain available when the text or widget
+behaviour needs to differ from the preset:
 
 ```dotenv
 LARAVEL_WAF_CHALLENGE_TITLE="Checking your browser"

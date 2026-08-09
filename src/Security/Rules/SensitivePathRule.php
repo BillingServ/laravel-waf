@@ -5,6 +5,7 @@ namespace BillingServ\LaravelWaf\Security\Rules;
 use BillingServ\LaravelWaf\Contracts\InspectionRule;
 use BillingServ\LaravelWaf\Security\Finding;
 use BillingServ\LaravelWaf\Security\InputNormalizer;
+use BillingServ\LaravelWaf\Support\RequestContext;
 use Illuminate\Http\Request;
 
 final class SensitivePathRule implements InspectionRule
@@ -34,22 +35,11 @@ final class SensitivePathRule implements InspectionRule
                 'path',
                 'path',
                 $request->ip() ?: 'unknown',
-                $this->route($request),
-                strtoupper(substr($request->getMethod(), 0, 16)),
+                RequestContext::routeLabel($request),
+                RequestContext::method($request),
             );
         }
 
         return null;
-    }
-
-    private function route(Request $request): string
-    {
-        $route = $request->route();
-
-        if (is_object($route) && method_exists($route, 'getName')) {
-            return substr(preg_replace('/[^A-Za-z0-9_.:-]/', '_', (string) ($route->getName() ?: 'unnamed')) ?: 'unnamed', 0, 64);
-        }
-
-        return 'unnamed';
     }
 }

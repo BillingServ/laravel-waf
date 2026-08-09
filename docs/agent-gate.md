@@ -155,6 +155,7 @@ The default gate bypass prefixes are:
 /_waf/challenge
 /_waf/metrics
 /_waf/blocked
+/prometheus
 ```
 
 They prevent challenge verification from challenging itself and do not consume

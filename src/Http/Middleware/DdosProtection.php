@@ -3,11 +3,12 @@
 namespace BillingServ\LaravelWaf\Http\Middleware;
 
 use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
-use BillingServ\LaravelWaf\Contracts\DecisionSink;
+use BillingServ\LaravelWaf\Support\AgentBlocker;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\InternalEndpoint;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
+use BillingServ\LaravelWaf\Support\RequestContext;
 use Closure;
 use Illuminate\Cache\RateLimiter;
 use Illuminate\Http\JsonResponse;
@@ -19,7 +20,7 @@ final class DdosProtection
 {
     public function __construct(
         private readonly RateLimiter $limiter,
-        private readonly DecisionSink $decisions,
+        private readonly AgentBlocker $agentBlocker,
         private readonly ChallengeResponder $challenge,
         private readonly ChallengeTokenManager $challengeTokens,
         private readonly MetricsRecorder $metrics,
@@ -34,7 +35,7 @@ final class DdosProtection
             return $this->finish($next($request), $startedAt);
         }
 
-        $route = $this->routeName($request);
+        $route = RequestContext::routeName($request);
         $challengeRoute = (string) config('laravel-waf.challenge.verify_route', 'laravel-waf.challenge.verify');
         $blockedRoute = (string) config('laravel-waf.challenge.blocked_route', 'laravel-waf.blocked');
         if (InternalEndpoint::matches($request)
@@ -128,8 +129,13 @@ final class DdosProtection
                 : 'rate_limited';
 
             $this->metrics->decision($action, $violation['scope'], $route);
-            if (! $challengePassed) {
-                $this->maybeBlock($ip);
+            if (!$challengePassed && config('laravel-waf.agent.auto_block_on_limit', false)) {
+                $this->agentBlocker->block(
+                    $ip,
+                    (int) config('laravel-waf.agent.block_ttl_seconds', 900),
+                    'rate_limit',
+                    'rate_limit',
+                );
             }
 
             if ($action === 'challenge') {
@@ -255,33 +261,6 @@ final class DdosProtection
         return max(1, min(3600, (int) config('laravel-waf.agent.gate.retry_after_seconds', 60)));
     }
 
-    private function maybeBlock(string $ip): void
-    {
-        if (!config('laravel-waf.agent.enabled', false)
-            || !config('laravel-waf.agent.auto_block_on_limit', false)
-            || filter_var($ip, FILTER_VALIDATE_IP) === false) {
-            return;
-        }
-
-        $key = RateLimitKey::agentBlock($ip);
-        $cooldown = max(1, (int) config('laravel-waf.agent.block_cooldown_seconds', 60));
-
-        try {
-            if ($this->limiter->tooManyAttempts($key, 1)) {
-                return;
-            }
-
-            $this->limiter->hit($key, $cooldown);
-            $this->decisions->block(
-                $ip,
-                (int) config('laravel-waf.agent.block_ttl_seconds', 900),
-                'rate_limit',
-            );
-        } catch (Throwable) {
-            $this->metrics->error('agent_decision');
-        }
-    }
-
     private function rateLimitedResponse(Request $request, int $retryAfter, int $limit): Response
     {
         $status = max(400, min(599, (int) config('laravel-waf.ddos.status', 429)));
@@ -315,17 +294,6 @@ final class DdosProtection
         $this->metrics->evaluationDuration((hrtime(true) - $startedAt) / 1_000_000_000);
 
         return $response;
-    }
-
-    private function routeName(Request $request): string
-    {
-        $route = $request->route();
-
-        if (is_object($route) && method_exists($route, 'getName')) {
-            return $route->getName() ?: 'unnamed';
-        }
-
-        return 'unnamed';
     }
 
     private function isTestTrigger(Request $request): bool

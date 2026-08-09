@@ -68,6 +68,45 @@ final class WafRulesTest extends TestCase
             ->assertHeader('X-Laravel-Waf-Blocked', 'true');
     }
 
+    public function test_xss_password_returns_the_blocked_page_in_the_same_response(): void
+    {
+        config()->set('laravel-waf.agent.enabled', true);
+        config()->set('laravel-waf.agent.auto_block_on_finding', true);
+        $decisionSink = new RecordingDecisionSink();
+        app()->instance(DecisionSink::class, $decisionSink);
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.141'])
+            ->post('/inspect', ['password' => '<script>alert(1)</script>'])
+            ->assertStatus(403)
+            ->assertHeader('X-Laravel-Waf-Blocked', 'true')
+            ->assertSee('Why have I been blocked?');
+
+        self::assertSame(1, $decisionSink->blocks);
+    }
+
+    public function test_blocked_json_responses_keep_their_public_shapes(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.140'])
+            ->getJson('/inspect?name=%3Cscript%3Ealert(1)%3C%2Fscript%3E')
+            ->assertStatus(403)
+            ->assertExactJson(['message' => 'Request blocked.']);
+
+        $this->getJson('/_waf/blocked')
+            ->assertStatus(403)
+            ->assertExactJson([
+                'message' => 'Request blocked.',
+                'blocked' => true,
+            ]);
+
+        $this->withHeaders(['X-Livewire' => 'true'])
+            ->getJson('/_waf/blocked?serverMemo%5Bid%5D=test-component')
+            ->assertStatus(403)
+            ->assertExactJson([
+                'message' => 'Request blocked.',
+                'blocked' => true,
+            ]);
+    }
+
     public function test_sql_injection_is_blocked(): void
     {
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.41'])
@@ -79,14 +118,7 @@ final class WafRulesTest extends TestCase
     {
         config()->set('laravel-waf.agent.enabled', true);
         config()->set('laravel-waf.agent.auto_block_on_finding', true);
-        $decisionSink = new class implements DecisionSink {
-            public int $blocks = 0;
-
-            public function block(string $ip, int $ttlSeconds, string $reason): void
-            {
-                $this->blocks++;
-            }
-        };
+        $decisionSink = new RecordingDecisionSink();
         app()->instance(DecisionSink::class, $decisionSink);
 
         $snapshot = json_encode([
@@ -247,11 +279,17 @@ final class WafRulesTest extends TestCase
     public function test_findings_can_be_logged_without_blocking(): void
     {
         config()->set('laravel-waf.rules.mode', 'log');
+        config()->set('laravel-waf.agent.enabled', true);
+        config()->set('laravel-waf.agent.auto_block_on_finding', true);
+        $decisionSink = new RecordingDecisionSink();
+        app()->instance(DecisionSink::class, $decisionSink);
 
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.44'])
             ->get('/inspect?name=%3Cscript%3E')
             ->assertOk()
             ->assertContent('ok');
+
+        self::assertSame(0, $decisionSink->blocks);
     }
 
     public function test_geo_policy_uses_a_custom_resolver(): void
@@ -355,6 +393,16 @@ final class WafRulesTest extends TestCase
         $this->withServerVariables($server)->post('/login', ['email' => 'user@example.test'])->assertStatus(401);
         $this->withServerVariables($server)->post('/login', ['email' => 'user@example.test'])->assertStatus(401);
         $this->withServerVariables($server)->post('/login', ['email' => 'user@example.test'])->assertStatus(429);
+    }
+}
+
+final class RecordingDecisionSink implements DecisionSink
+{
+    public int $blocks = 0;
+
+    public function block(string $ip, int $ttlSeconds, string $reason): void
+    {
+        $this->blocks++;
     }
 }
 

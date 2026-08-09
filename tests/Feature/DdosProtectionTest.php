@@ -3,6 +3,7 @@
 namespace BillingServ\LaravelWaf\Tests\Feature;
 
 use BillingServ\LaravelWaf\Contracts\ChallengeVerifier;
+use BillingServ\LaravelWaf\Contracts\DecisionSink;
 use BillingServ\LaravelWaf\Http\Middleware\DdosProtection;
 use BillingServ\LaravelWaf\Http\Middleware\WafProtection;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
@@ -39,6 +40,29 @@ final class DdosProtectionTest extends TestCase
             ->assertStatus(429)
             ->assertHeader('Retry-After')
             ->assertHeader('X-RateLimit-Remaining', '0');
+    }
+
+    public function test_route_limit_can_issue_one_agent_block_decision(): void
+    {
+        config()->set('laravel-waf.agent.enabled', true);
+        config()->set('laravel-waf.agent.auto_block_on_limit', true);
+        $decisionSink = new class implements DecisionSink {
+            public int $blocks = 0;
+
+            public function block(string $ip, int $ttlSeconds, string $reason): void
+            {
+                $this->blocks++;
+            }
+        };
+        app()->instance(DecisionSink::class, $decisionSink);
+
+        $server = ['REMOTE_ADDR' => '203.0.113.110'];
+        $this->withServerVariables($server)->get('/limited')->assertOk();
+        $this->withServerVariables($server)->get('/limited')->assertOk();
+        $this->withServerVariables($server)->get('/limited')->assertStatus(429);
+        $this->withServerVariables($server)->get('/limited')->assertStatus(429);
+
+        self::assertSame(1, $decisionSink->blocks);
     }
 
     public function test_different_clients_have_independent_limits(): void
@@ -283,6 +307,20 @@ final class DdosProtectionTest extends TestCase
             ->assertDontSee('Verification failed')
             ->assertDontSee('Laravel WAF')
             ->assertDontSee('<altcha-widget');
+    }
+
+    public function test_opt_in_test_query_parameter_keeps_the_blocked_json_shape(): void
+    {
+        config()->set('laravel-waf.testing.enabled', true);
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.130'])
+            ->getJson('/limited?test')
+            ->assertStatus(403)
+            ->assertExactJson([
+                'message' => 'Request blocked.',
+                'blocked' => true,
+                'scope' => 'test',
+            ]);
     }
 
     private function validAltchaPayload(): string

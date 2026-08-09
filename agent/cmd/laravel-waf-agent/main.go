@@ -69,7 +69,7 @@ func runDaemon() {
 		gateLimit        = flag.Uint64("gate-threshold", 600, "site-wide requests allowed in each gate window")
 		gateWindow       = flag.Duration("gate-window", time.Minute, "fixed traffic-pressure window")
 		gateMethods      = flag.String("gate-methods", "GET,HEAD", "comma-separated original methods eligible for a challenge")
-		gateBypass       = flag.String("gate-bypass-prefixes", "/_waf/challenge,/_waf/metrics,/_waf/blocked", "comma-separated URI prefixes excluded from the gate counter")
+		gateBypass       = flag.String("gate-bypass-prefixes", "/_waf/challenge,/_waf/metrics,/_waf/blocked,/prometheus", "comma-separated URI prefixes excluded from the gate counter")
 		cookieName       = flag.String("challenge-cookie", "laravel_waf_challenge", "Laravel WAF pass cookie name")
 		cookieSecretFile = flag.String("challenge-secret-file", "", "file containing LARAVEL_WAF_CHALLENGE_COOKIE_SECRET for gate pass validation")
 		gateTokenFile    = flag.String("gate-token-file", "", "file containing LARAVEL_WAF_AGENT_GATE_TOKEN for authenticated challenge markers")
@@ -98,13 +98,7 @@ func runDaemon() {
 		logger.Fatal("firewall reconcile interval cannot be negative")
 	}
 
-	blockStore, err := blocklist.NewFileStore(*stateFile)
-	if err != nil {
-		logger.Fatal(err)
-	}
-	if _, err := blockStore.List(); err != nil {
-		logger.Fatalf("initialize block state: %v", err)
-	}
+	blockStore := openBlockStore(*stateFile, logger)
 
 	sets, err := firewall.NewIPSetBackend(
 		firewall.OSCommandRunner{},
@@ -445,6 +439,22 @@ func metricsMux(registry *metrics.Registry) *http.ServeMux {
 	})
 
 	return mux
+}
+
+func openBlockStore(path string, logger *log.Logger) server.BlockStore {
+	store, err := blocklist.NewFileStore(path)
+	if err == nil {
+		_, err = store.List()
+	}
+	if err != nil {
+		if logger != nil {
+			logger.Printf("warning: block state ledger disabled: %v", err)
+		}
+
+		return nil
+	}
+
+	return store
 }
 
 func readSecret(path string) ([]byte, error) {

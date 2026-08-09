@@ -3,19 +3,17 @@
 namespace BillingServ\LaravelWaf\Http\Middleware;
 
 use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
-use BillingServ\LaravelWaf\Contracts\DecisionSink;
-use BillingServ\LaravelWaf\Http\Responses\ChallengePage;
-use BillingServ\LaravelWaf\Http\Responses\LivewireResponse;
+use BillingServ\LaravelWaf\Http\Responses\BlockedResponse;
 use BillingServ\LaravelWaf\Security\BehaviorTracker;
 use BillingServ\LaravelWaf\Security\Finding;
 use BillingServ\LaravelWaf\Security\RequestRuleEngine;
+use BillingServ\LaravelWaf\Support\AgentBlocker;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\InternalEndpoint;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
-use BillingServ\LaravelWaf\Support\RateLimitKey;
+use BillingServ\LaravelWaf\Support\RequestContext;
 use BillingServ\LaravelWaf\Support\SecurityNotifier;
 use Closure;
-use Illuminate\Cache\RateLimiter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Psr\Log\LoggerInterface;
@@ -27,8 +25,7 @@ final class RequestInspection
     public function __construct(
         private readonly RequestRuleEngine $engine,
         private readonly BehaviorTracker $behavior,
-        private readonly RateLimiter $limiter,
-        private readonly DecisionSink $decisions,
+        private readonly AgentBlocker $agentBlocker,
         private readonly ChallengeResponder $challenge,
         private readonly ChallengeTokenManager $challengeTokens,
         private readonly MetricsRecorder $metrics,
@@ -43,7 +40,7 @@ final class RequestInspection
             return $next($request);
         }
 
-        $route = $this->routeName($request);
+        $route = RequestContext::routeName($request);
         if (InternalEndpoint::matches($request) || in_array($route, $this->skipRoutes(), true)) {
             return $next($request);
         }
@@ -84,7 +81,14 @@ final class RequestInspection
             $this->metrics->finding($finding, $action);
             $this->log($finding, $action);
             $this->notifier->notify($finding);
-            $this->maybeBlock($finding);
+            if ($action !== 'log' && config('laravel-waf.agent.auto_block_on_finding', false)) {
+                $this->agentBlocker->block(
+                    $finding->ip,
+                    (int) config('laravel-waf.agent.block_ttl_seconds', 900),
+                    'waf_'.$finding->category,
+                    $finding->category,
+                );
+            }
 
             if ($action !== 'log'
                 && !($action === 'challenge' && $challengePassed)
@@ -125,57 +129,11 @@ final class RequestInspection
         return in_array($action, ['reject', 'challenge', 'log'], true) ? $action : 'reject';
     }
 
-    private function maybeBlock(Finding $finding): void
-    {
-        if (!config('laravel-waf.agent.enabled', false)
-            || !config('laravel-waf.agent.auto_block_on_finding', false)
-            || filter_var($finding->ip, FILTER_VALIDATE_IP) === false) {
-            return;
-        }
-
-        $key = RateLimitKey::securityBlock($finding->ip, $finding->category);
-        $cooldown = max(1, (int) config('laravel-waf.agent.block_cooldown_seconds', 60));
-
-        try {
-            if ($this->limiter->tooManyAttempts($key, 1)) {
-                return;
-            }
-
-            $this->limiter->hit($key, $cooldown);
-            $this->decisions->block(
-                $finding->ip,
-                (int) config('laravel-waf.agent.block_ttl_seconds', 900),
-                'waf_'.$finding->category,
-            );
-        } catch (Throwable) {
-            $this->metrics->error('agent_decision');
-        }
-    }
-
     private function blocked(Request $request): Response
     {
         $status = max(400, min(599, (int) config('laravel-waf.rules.status', 403)));
-        $headers = [
-            'Cache-Control' => 'no-store',
-            'X-Laravel-Waf-Blocked' => 'true',
-        ];
 
-        $livewire = LivewireResponse::blocked($request, $headers);
-        if ($livewire !== null) {
-            return $livewire;
-        }
-
-        if ($request->expectsJson()) {
-            return new JsonResponse(['message' => 'Request blocked.'], $status, $headers);
-        }
-
-        $body = ChallengePage::blocked(
-            (string) config('laravel-waf.challenge.blocked_title', 'Request blocked'),
-            (string) config('laravel-waf.challenge.blocked_message', 'This request was blocked by the site security policy.'),
-        );
-        $headers['Content-Type'] = 'text/html; charset=UTF-8';
-
-        return new Response($body, $status, $headers);
+        return BlockedResponse::make($request, $status);
     }
 
     private function unavailable(Request $request): Response
@@ -225,16 +183,5 @@ final class RequestInspection
         }
 
         return is_array($routes) ? array_values(array_filter($routes, 'is_string')) : [];
-    }
-
-    private function routeName(Request $request): string
-    {
-        $route = $request->route();
-
-        if (is_object($route) && method_exists($route, 'getName')) {
-            return $route->getName() ?: 'unnamed';
-        }
-
-        return 'unnamed';
     }
 }

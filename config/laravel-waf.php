@@ -1,6 +1,15 @@
 <?php
 
+// A preset supplies deployment defaults; every granular environment value
+// below remains an explicit override.
+$preset = strtolower(trim((string) env('LARAVEL_WAF_PRESET', 'standard')));
+if (!in_array($preset, ['standard', 'balanced'], true)) {
+    throw new InvalidArgumentException('LARAVEL_WAF_PRESET must be "standard" or "balanced".');
+}
+$balanced = $preset === 'balanced';
+
 return [
+    'preset' => $preset,
     'enabled' => env('LARAVEL_WAF_ENABLED', true),
 
     'ddos' => [
@@ -22,7 +31,7 @@ return [
             ],
         ],
 
-        'mode' => env('LARAVEL_WAF_DDOS_MODE', 'reject'), // reject|challenge
+        'mode' => env('LARAVEL_WAF_DDOS_MODE', $balanced ? 'challenge' : 'reject'), // reject|challenge
         'status' => 429,
         'fail_mode' => env('LARAVEL_WAF_DDOS_FAIL_MODE', 'open'), // open|closed
         'exempt_routes' => [
@@ -36,7 +45,7 @@ return [
         // count crosses this threshold, unverified browsers receive the
         // configured challenge while verified browsers continue normally.
         'adaptive' => [
-            'enabled' => env('LARAVEL_WAF_ADAPTIVE_ENABLED', false),
+            'enabled' => env('LARAVEL_WAF_ADAPTIVE_ENABLED', $balanced),
             'challenge_after' => (int) env('LARAVEL_WAF_ADAPTIVE_CHALLENGE_AFTER', 600),
             'window_seconds' => (int) env('LARAVEL_WAF_ADAPTIVE_WINDOW_SECONDS', 60),
         ],
@@ -152,7 +161,7 @@ return [
             '403' => (int) env('LARAVEL_WAF_BEHAVIOR_403_THRESHOLD', 30),
             'client_error' => (int) env('LARAVEL_WAF_BEHAVIOR_CLIENT_ERROR_THRESHOLD', 100),
         ],
-        'action' => env('LARAVEL_WAF_BEHAVIOR_ACTION', 'challenge'),
+        'action' => env('LARAVEL_WAF_BEHAVIOR_ACTION', $balanced ? 'reject' : 'challenge'),
         'alert_cooldown_seconds' => (int) env('LARAVEL_WAF_BEHAVIOR_ALERT_COOLDOWN', 60),
         'skip_routes' => [],
     ],
@@ -203,7 +212,7 @@ return [
         'fail_mode' => env('LARAVEL_WAF_LOGIN_FAIL_MODE', 'open'), // open|closed
         'block_after_attempts' => (int) env('LARAVEL_WAF_LOGIN_BLOCK_AFTER', 10),
         'block_ttl_seconds' => (int) env('LARAVEL_WAF_LOGIN_BLOCK_TTL', 900),
-        'auto_block' => env('LARAVEL_WAF_LOGIN_AUTO_BLOCK', false),
+        'auto_block' => env('LARAVEL_WAF_LOGIN_AUTO_BLOCK', $balanced),
         'clear_on_login' => env('LARAVEL_WAF_LOGIN_CLEAR_ON_LOGIN', true),
         'guards' => [],
     ],
@@ -229,10 +238,10 @@ return [
     ],
 
     'challenge' => [
-        'enabled' => env('LARAVEL_WAF_CHALLENGE_ENABLED', false),
-        'provider' => env('LARAVEL_WAF_CHALLENGE_PROVIDER', 'default'), // default|altcha
-        'title' => env('LARAVEL_WAF_CHALLENGE_TITLE', 'Additional verification required'),
-        'message' => env('LARAVEL_WAF_CHALLENGE_MESSAGE', 'Please complete the verification before continuing.'),
+        'enabled' => env('LARAVEL_WAF_CHALLENGE_ENABLED', $balanced),
+        'provider' => env('LARAVEL_WAF_CHALLENGE_PROVIDER', $balanced ? 'altcha' : 'default'), // default|altcha
+        'title' => env('LARAVEL_WAF_CHALLENGE_TITLE', $balanced ? 'Checking your browser' : 'Additional verification required'),
+        'message' => env('LARAVEL_WAF_CHALLENGE_MESSAGE', $balanced ? 'This security check will continue automatically.' : 'Please complete the verification before continuing.'),
         'failure_title' => 'Verification failed',
         'failure_message' => 'We could not confirm this request. Please try again.',
         'blocked_title' => 'Request blocked',
@@ -248,8 +257,8 @@ return [
         'blocked_route' => 'laravel-waf.blocked',
         'cookie_name' => env('LARAVEL_WAF_CHALLENGE_COOKIE', 'laravel_waf_challenge'),
         'cookie_secret' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SECRET'),
-        'cookie_ttl_seconds' => (int) env('LARAVEL_WAF_CHALLENGE_COOKIE_TTL', 600),
-        'cookie_secure' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SECURE', 'auto'), // true|false|auto
+        'cookie_ttl_seconds' => (int) env('LARAVEL_WAF_CHALLENGE_COOKIE_TTL', $balanced ? 3600 : 600),
+        'cookie_secure' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SECURE', $balanced ? true : 'auto'), // true|false|auto
         'cookie_same_site' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SAME_SITE', 'lax'),
         'request_token_ttl_seconds' => (int) env('LARAVEL_WAF_CHALLENGE_TOKEN_TTL', 600),
         'max_attempts' => (int) env('LARAVEL_WAF_CHALLENGE_MAX_ATTEMPTS', 10),
@@ -286,9 +295,9 @@ return [
             ),
             'script_integrity' => env('LARAVEL_WAF_ALTCHA_SCRIPT_INTEGRITY'),
             'hide_logo' => env('LARAVEL_WAF_ALTCHA_HIDE_LOGO', true),
-            'auto' => env('LARAVEL_WAF_ALTCHA_AUTO', 'onsubmit'),
-            'auto_submit' => env('LARAVEL_WAF_ALTCHA_AUTO_SUBMIT', false),
-            'display' => env('LARAVEL_WAF_ALTCHA_DISPLAY'),
+            'auto' => env('LARAVEL_WAF_ALTCHA_AUTO', $balanced ? 'onload' : 'onsubmit'),
+            'auto_submit' => env('LARAVEL_WAF_ALTCHA_AUTO_SUBMIT', $balanced),
+            'display' => env('LARAVEL_WAF_ALTCHA_DISPLAY', $balanced ? 'invisible' : null),
         ],
     ],
 
@@ -307,8 +316,9 @@ return [
         'timeout_ms' => (int) env('LARAVEL_WAF_AGENT_TIMEOUT_MS', 25),
         'block_ttl_seconds' => (int) env('LARAVEL_WAF_AGENT_BLOCK_TTL_SECONDS', 900),
         'block_cooldown_seconds' => (int) env('LARAVEL_WAF_AGENT_BLOCK_COOLDOWN_SECONDS', 60),
-        'auto_block_on_limit' => env('LARAVEL_WAF_AGENT_AUTO_BLOCK', false),
-        'auto_block_on_finding' => env('LARAVEL_WAF_AGENT_AUTO_BLOCK_ON_FINDING', false),
+        'auto_block_on_limit' => env('LARAVEL_WAF_AGENT_AUTO_BLOCK', $balanced),
+        // Applies only to reject/challenge findings; log mode is non-blocking.
+        'auto_block_on_finding' => env('LARAVEL_WAF_AGENT_AUTO_BLOCK_ON_FINDING', $balanced),
 
         // Nginx can use the optional Go gate before forwarding a dynamic
         // request. A challenged request is internally retried with this
@@ -323,8 +333,20 @@ return [
 
     'metrics' => [
         'enabled' => env('LARAVEL_WAF_METRICS_ENABLED', false),
-        'route' => env('LARAVEL_WAF_METRICS_ROUTE', '_waf/metrics'),
+        'route' => env('LARAVEL_WAF_METRICS_ROUTE', 'prometheus'),
+        'allowed_ips' => array_values(array_filter(array_map(
+            static fn (string $ip): string => trim($ip),
+            explode(',', (string) env('LARAVEL_WAF_METRICS_ALLOWED_IPS', '127.0.0.1,::1')),
+        ), static fn (string $ip): bool => $ip !== '')),
         'middleware' => [],
         'namespace' => 'laravel_waf',
+        'agent' => [
+            // This source must remain loopback-only; the Laravel route is the
+            // single externally scraped endpoint.
+            'enabled' => env('LARAVEL_WAF_METRICS_INCLUDE_AGENT', true),
+            'endpoint' => env('LARAVEL_WAF_METRICS_AGENT_ENDPOINT', 'http://127.0.0.1:9919/metrics'),
+            'timeout_ms' => 100,
+            'max_response_bytes' => 1048576,
+        ],
     ],
 ];

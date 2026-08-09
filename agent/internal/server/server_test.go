@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/BillingServ/laravel-waf/agent/internal/metrics"
@@ -13,8 +16,9 @@ import (
 )
 
 type recordingBackend struct {
-	blockedIP  net.IP
-	blockedTTL int
+	blockedIP   net.IP
+	blockedTTL  int
+	unblockedIP net.IP
 }
 
 func (b *recordingBackend) Ensure(context.Context) error { return nil }
@@ -26,7 +30,11 @@ func (b *recordingBackend) Block(_ context.Context, ip net.IP, ttl int) error {
 	return nil
 }
 
-func (b *recordingBackend) Unblock(context.Context, net.IP) error { return nil }
+func (b *recordingBackend) Unblock(_ context.Context, ip net.IP) error {
+	b.unblockedIP = append(net.IP(nil), ip...)
+
+	return nil
+}
 
 type recordingStore struct {
 	ip      net.IP
@@ -47,6 +55,16 @@ func (s *recordingStore) RemoveBlock(ip net.IP) error {
 	s.removed = append(net.IP(nil), ip...)
 
 	return nil
+}
+
+type failingStore struct{}
+
+func (failingStore) RecordBlock(net.IP, int, string) error {
+	return errors.New("state unavailable")
+}
+
+func (failingStore) RemoveBlock(net.IP) error {
+	return errors.New("state unavailable")
 }
 
 func TestHandleRecordsAcceptedBlockReason(t *testing.T) {
@@ -90,6 +108,70 @@ func TestHandleRecordsAcceptedBlockReason(t *testing.T) {
 	}
 	if store.ip.String() != "203.0.113.10" || store.ttl != 900 || store.reason != "rule_sql_injection" {
 		t.Fatalf("unexpected block record: %#v", store)
+	}
+}
+
+func TestHandleAcceptsFirewallOperationWhenAuditStoreFails(t *testing.T) {
+	tests := []protocol.Decision{
+		{
+			Version:    protocol.Version,
+			Action:     "block_ip",
+			IP:         "203.0.113.11",
+			TTLSeconds: 900,
+			Reason:     "rule_xss",
+		},
+		{
+			Version: protocol.Version,
+			Action:  "unblock_ip",
+			IP:      "203.0.113.12",
+			Reason:  "manual",
+		},
+	}
+
+	for _, decision := range tests {
+		t.Run(decision.Action, func(t *testing.T) {
+			backend := &recordingBackend{}
+			registry := metrics.NewRegistry()
+			service := &Server{
+				MaxTTL:  protocol.MaxTTLSeconds,
+				Backend: backend,
+				Store:   failingStore{},
+				Metrics: registry,
+			}
+
+			serverConnection, clientConnection := net.Pipe()
+			defer clientConnection.Close()
+			go service.handle(serverConnection)
+
+			if _, err := fmt.Fprintf(clientConnection, "%s\n", mustJSON(decision)); err != nil {
+				t.Fatalf("send decision: %v", err)
+			}
+
+			response, err := bufio.NewReader(clientConnection).ReadBytes('\n')
+			if err != nil {
+				t.Fatalf("read response: %v", err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(response, &payload); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if payload["ok"] != true {
+				t.Fatalf("firewall operation was reported as failed: %s", response)
+			}
+
+			if decision.Action == "block_ip" && backend.blockedIP.String() != decision.IP {
+				t.Fatalf("block was not applied: %#v", backend)
+			}
+			if decision.Action == "unblock_ip" && backend.unblockedIP.String() != decision.IP {
+				t.Fatalf("unblock was not applied: %#v", backend)
+			}
+
+			metricsResponse := httptest.NewRecorder()
+			registry.Handler().ServeHTTP(metricsResponse, httptest.NewRequest("GET", "/metrics", nil))
+			if !strings.Contains(metricsResponse.Body.String(), `outcome="accepted_state_error"`) {
+				t.Fatalf("state failure was not observable in metrics: %s", metricsResponse.Body.String())
+			}
+		})
 	}
 }
 

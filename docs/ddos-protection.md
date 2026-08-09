@@ -50,6 +50,10 @@ crosses the configured threshold, browsers without a valid pass cookie receive
 the configured challenge while verified browsers continue under the bounded
 post-verification limits.
 
+It is enabled with the standard 600-request/60-second window by
+`LARAVEL_WAF_PRESET=balanced`. Without that preset, or to tune the threshold,
+use the granular values:
+
 ```dotenv
 LARAVEL_WAF_ADAPTIVE_ENABLED=true
 LARAVEL_WAF_ADAPTIVE_CHALLENGE_AFTER=600

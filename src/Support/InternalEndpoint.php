@@ -16,7 +16,7 @@ final class InternalEndpoint
         foreach ([
             config('laravel-waf.challenge.path', '_waf/challenge/verify'),
             config('laravel-waf.challenge.blocked_path', '_waf/blocked'),
-            config('laravel-waf.metrics.route', '_waf/metrics'),
+            config('laravel-waf.metrics.route', 'prometheus'),
         ] as $configuredPath) {
             if (self::normalize($configuredPath) === $requestPath) {
                 return true;

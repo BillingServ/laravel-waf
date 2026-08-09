@@ -10,14 +10,12 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/user"
-	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/BillingServ/laravel-waf/agent/internal/metrics"
 	"github.com/BillingServ/laravel-waf/agent/internal/protocol"
+	"github.com/BillingServ/laravel-waf/agent/internal/unixsocket"
 )
 
 type Backend interface {
@@ -47,23 +45,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return fmt.Errorf("backend and metrics registry are required")
 	}
 
-	if err := prepareSocket(s.Socket); err != nil {
-		return err
-	}
-
-	listener, err := net.Listen("unix", s.Socket)
+	listener, err := unixsocket.Listen(s.Socket, s.SocketGroup, "agent")
 	if err != nil {
-		return fmt.Errorf("listen on agent socket: %w", err)
+		return err
 	}
 	defer listener.Close()
 	defer os.Remove(s.Socket)
-
-	if err := os.Chmod(s.Socket, 0660); err != nil {
-		return fmt.Errorf("set agent socket permissions: %w", err)
-	}
-	if err := chownSocketGroup(s.Socket, s.SocketGroup); err != nil {
-		return err
-	}
 
 	go func() {
 		<-ctx.Done()
@@ -129,23 +116,21 @@ func (s *Server) handle(connection net.Conn) {
 	}
 
 	operation := "block"
-	var err error
-	stateErr := false
+	var backendErr error
+	var stateErr error
 	operationContext, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	if decision.Action == "block_ip" {
-		err = s.Backend.Block(operationContext, ip, decision.TTLSeconds)
-		if err == nil && s.Store != nil {
-			err = s.Store.RecordBlock(ip, decision.TTLSeconds, decision.Reason)
-			stateErr = err != nil
+		backendErr = s.Backend.Block(operationContext, ip, decision.TTLSeconds)
+		if backendErr == nil && s.Store != nil {
+			stateErr = s.Store.RecordBlock(ip, decision.TTLSeconds, decision.Reason)
 		}
 	} else {
 		operation = "unblock"
-		err = s.Backend.Unblock(operationContext, ip)
-		if err == nil && s.Store != nil {
-			err = s.Store.RemoveBlock(ip)
-			stateErr = err != nil
+		backendErr = s.Backend.Unblock(operationContext, ip)
+		if backendErr == nil && s.Store != nil {
+			stateErr = s.Store.RemoveBlock(ip)
 		}
 	}
 
@@ -154,18 +139,22 @@ func (s *Server) handle(connection net.Conn) {
 		family = "ipv4"
 	}
 
-	if err != nil {
+	if backendErr != nil {
 		s.Metrics.Decision(decision.Action, "backend_error")
 		s.Metrics.Operation(operation, "error", family)
-		if stateErr {
-			writeError(connection, "block state error")
-		} else {
-			writeError(connection, "firewall backend error")
-		}
+		writeError(connection, "firewall backend error")
 		return
 	}
 
-	s.Metrics.Decision(decision.Action, "accepted")
+	outcome := "accepted"
+	if stateErr != nil {
+		outcome = "accepted_state_error"
+		if s.Logger != nil {
+			s.Logger.Printf("block state update failed after successful %s: %v", operation, stateErr)
+		}
+	}
+
+	s.Metrics.Decision(decision.Action, outcome)
 	s.Metrics.Operation(operation, "accepted", family)
 	writeOK(connection)
 }
@@ -176,54 +165,6 @@ func metricAction(action string) string {
 	}
 
 	return "unknown"
-}
-
-func prepareSocket(socket string) error {
-	if socket == "" || !filepath.IsAbs(socket) {
-		return fmt.Errorf("agent socket must be an absolute path")
-	}
-
-	if err := os.MkdirAll(filepath.Dir(socket), 0750); err != nil {
-		return fmt.Errorf("create agent socket directory: %w", err)
-	}
-
-	info, err := os.Lstat(socket)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect agent socket: %w", err)
-	}
-	if info.Mode()&os.ModeSocket == 0 {
-		return fmt.Errorf("refusing to replace non-socket path %q", socket)
-	}
-
-	return os.Remove(socket)
-}
-
-func chownSocketGroup(socket, group string) error {
-	if group == "" {
-		return nil
-	}
-
-	gid, err := strconv.Atoi(group)
-	if err != nil {
-		groupInfo, lookupErr := user.LookupGroup(group)
-		if lookupErr != nil {
-			return fmt.Errorf("lookup socket group: %w", lookupErr)
-		}
-
-		gid, err = strconv.Atoi(groupInfo.Gid)
-		if err != nil {
-			return fmt.Errorf("parse socket group ID: %w", err)
-		}
-	}
-
-	if err := os.Chown(socket, -1, gid); err != nil {
-		return fmt.Errorf("set agent socket group: %w", err)
-	}
-
-	return nil
 }
 
 func writeOK(connection net.Conn) {

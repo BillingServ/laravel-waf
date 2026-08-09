@@ -5,6 +5,7 @@ namespace BillingServ\LaravelWaf\Security\Rules;
 use BillingServ\LaravelWaf\Contracts\GeoIpResolver;
 use BillingServ\LaravelWaf\Contracts\InspectionRule;
 use BillingServ\LaravelWaf\Security\Finding;
+use BillingServ\LaravelWaf\Support\RequestContext;
 use Illuminate\Http\Request;
 
 final class GeoRule implements InspectionRule
@@ -39,11 +40,6 @@ final class GeoRule implements InspectionRule
 
     private function finding(Request $request, string $rule): Finding
     {
-        $route = $request->route();
-        $routeName = is_object($route) && method_exists($route, 'getName')
-            ? (string) ($route->getName() ?: 'unnamed')
-            : 'unnamed';
-
         return new Finding(
             'geo',
             $rule,
@@ -51,8 +47,8 @@ final class GeoRule implements InspectionRule
             'geo',
             null,
             $request->ip() ?: 'unknown',
-            substr(preg_replace('/[^A-Za-z0-9_.:-]/', '_', $routeName) ?: 'unnamed', 0, 64),
-            strtoupper(substr($request->getMethod(), 0, 16)),
+            RequestContext::routeLabel($request),
+            RequestContext::method($request),
         );
     }
 

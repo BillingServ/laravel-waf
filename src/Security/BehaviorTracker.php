@@ -4,6 +4,7 @@ namespace BillingServ\LaravelWaf\Security;
 
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
+use BillingServ\LaravelWaf\Support\RequestContext;
 use Illuminate\Cache\RateLimiter;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -39,7 +40,7 @@ final class BehaviorTracker
                 $cooldown = max(1, (int) config('laravel-waf.behavior.alert_cooldown_seconds', 60));
                 if (!$this->limiter->tooManyAttempts($alertKey, 1)) {
                     $this->limiter->hit($alertKey, $cooldown);
-                    $this->metrics->behavior($kind, 'alert', $this->routeName($request));
+                    $this->metrics->behavior($kind, 'alert', RequestContext::routeLabel($request));
                 }
 
                 return $this->finding($request, $kind);
@@ -70,7 +71,7 @@ final class BehaviorTracker
         foreach ($kinds as $kind) {
             try {
                 $this->limiter->hit(RateLimitKey::behavior($ip, $kind), $window);
-                $this->metrics->behavior($kind, 'recorded', $this->routeName($request));
+                $this->metrics->behavior($kind, 'recorded', RequestContext::routeLabel($request));
             } catch (Throwable) {
                 $this->metrics->error('behavior_tracker');
 
@@ -116,7 +117,7 @@ final class BehaviorTracker
             return false;
         }
 
-        return in_array($this->routeName($request), array_values(array_filter($routes, 'is_string')), true);
+        return in_array(RequestContext::routeLabel($request), array_values(array_filter($routes, 'is_string')), true);
     }
 
     private function finding(Request $request, string $kind): Finding
@@ -128,17 +129,8 @@ final class BehaviorTracker
             'response',
             null,
             $request->ip() ?: 'unknown',
-            $this->routeName($request),
-            strtoupper(substr($request->getMethod(), 0, 16)),
+            RequestContext::routeLabel($request),
+            RequestContext::method($request),
         );
-    }
-
-    private function routeName(Request $request): string
-    {
-        $route = $request->route();
-
-        return is_object($route) && method_exists($route, 'getName')
-            ? substr(preg_replace('/[^A-Za-z0-9_.:-]/', '_', (string) ($route->getName() ?: 'unnamed')) ?: 'unnamed', 0, 64)
-            : 'unnamed';
     }
 }

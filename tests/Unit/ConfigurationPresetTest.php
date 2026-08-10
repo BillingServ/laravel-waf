@@ -28,9 +28,7 @@ final class ConfigurationPresetTest extends TestCase
         self::assertNull($config['challenge']['altcha']['display']);
         self::assertFalse($config['agent']['auto_block_on_limit']);
         self::assertFalse($config['agent']['auto_block_on_finding']);
-        self::assertSame('prometheus', $config['metrics']['route']);
-        self::assertSame(['127.0.0.1', '::1'], $config['metrics']['allowed_ips']);
-        self::assertTrue($config['metrics']['agent']['enabled']);
+        self::assertSame('/run/laravel-waf/metrics.sock', $config['metrics']['ingest']['socket']);
     }
 
     public function test_balanced_preset_replaces_the_verbose_application_settings(): void
@@ -57,9 +55,7 @@ final class ConfigurationPresetTest extends TestCase
 
         self::assertFalse($config['agent']['enabled']);
         self::assertFalse($config['metrics']['enabled']);
-        self::assertSame('prometheus', $config['metrics']['route']);
-        self::assertSame(['127.0.0.1', '::1'], $config['metrics']['allowed_ips']);
-        self::assertTrue($config['metrics']['agent']['enabled']);
+        self::assertSame('/run/laravel-waf/metrics.sock', $config['metrics']['ingest']['socket']);
         self::assertFalse($config['testing']['enabled']);
     }
 
@@ -72,9 +68,7 @@ final class ConfigurationPresetTest extends TestCase
             'LARAVEL_WAF_CHALLENGE_COOKIE_SECURE' => 'auto',
             'LARAVEL_WAF_AGENT_AUTO_BLOCK' => 'false',
             'LARAVEL_WAF_AGENT_AUTO_BLOCK_ON_FINDING' => 'false',
-            'LARAVEL_WAF_METRICS_ROUTE' => 'internal/prometheus',
-            'LARAVEL_WAF_METRICS_ALLOWED_IPS' => '192.0.2.10, 2001:db8::/32',
-            'LARAVEL_WAF_METRICS_INCLUDE_AGENT' => 'false',
+            'LARAVEL_WAF_METRICS_SOCKET' => '/run/custom/lwafd-metrics.sock',
         ]);
 
         self::assertSame('reject', $config['ddos']['mode']);
@@ -82,9 +76,7 @@ final class ConfigurationPresetTest extends TestCase
         self::assertSame('auto', $config['challenge']['cookie_secure']);
         self::assertFalse($config['agent']['auto_block_on_limit']);
         self::assertFalse($config['agent']['auto_block_on_finding']);
-        self::assertSame('internal/prometheus', $config['metrics']['route']);
-        self::assertSame(['192.0.2.10', '2001:db8::/32'], $config['metrics']['allowed_ips']);
-        self::assertFalse($config['metrics']['agent']['enabled']);
+        self::assertSame('/run/custom/lwafd-metrics.sock', $config['metrics']['ingest']['socket']);
     }
 
     public function test_one_secret_supplies_every_waf_secret_consumer(): void
@@ -98,6 +90,7 @@ final class ConfigurationPresetTest extends TestCase
         self::assertSame('shared-waf-secret-with-at-least-32-bytes', $config['challenge']['altcha']['hmac_key']);
         self::assertSame('shared-waf-secret-with-at-least-32-bytes', $config['agent']['secret']);
         self::assertSame('shared-waf-secret-with-at-least-32-bytes', $config['agent']['gate']['token']);
+        self::assertSame('shared-waf-secret-with-at-least-32-bytes', $config['metrics']['ingest']['secret']);
     }
 
     public function test_specific_secrets_remain_backward_compatible_overrides(): void
@@ -222,9 +215,7 @@ final class ConfigurationPresetTest extends TestCase
             'LARAVEL_WAF_AGENT_SECRET',
             'LARAVEL_WAF_AGENT_GATE_TOKEN',
             'LARAVEL_WAF_METRICS_ENABLED',
-            'LARAVEL_WAF_METRICS_ROUTE',
-            'LARAVEL_WAF_METRICS_ALLOWED_IPS',
-            'LARAVEL_WAF_METRICS_INCLUDE_AGENT',
+            'LARAVEL_WAF_METRICS_SOCKET',
             'LARAVEL_WAF_TESTING_ENABLED',
         ];
     }

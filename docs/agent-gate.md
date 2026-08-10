@@ -77,6 +77,8 @@ sudo ./bin/lwafd \
   --socket /run/laravel-waf/agent.sock \
   --socket-group www-data \
   --secret-file /etc/laravel-waf/agent.secret \
+  --metrics-ingest-socket /run/laravel-waf/metrics.sock \
+  --metrics-ingest-socket-group www-data \
   --gate-socket /run/laravel-waf/gate.sock \
   --gate-socket-group www-data \
   --gate-threshold 600 \
@@ -99,88 +101,32 @@ application-edge denial survives an LWAFD restart.
 
 ## Nginx configuration
 
-Nginx must include the `http_auth_request_module`. Add an internal location that
-proxies metadata to the Unix socket:
+Nginx must include the `http_auth_request_module`. The Ansible role installs a
+reusable server-context include at:
 
-```nginx
-location = /_laravel_waf_gate {
-    internal;
-
-    proxy_pass http://unix:/run/laravel-waf/gate.sock:/gate;
-    proxy_pass_request_body off;
-    proxy_set_header Content-Length "";
-    proxy_set_header X-Laravel-Waf-Client-IP $remote_addr;
-    proxy_set_header X-Laravel-Waf-Original-URI $request_uri;
-    proxy_set_header X-Laravel-Waf-Original-Method $request_method;
-    proxy_set_header Cookie $http_cookie;
-}
+```text
+/etc/nginx/conf.d/lwafd/server.conf
 ```
 
-Apply the check to the named dynamic application location, after Nginx has
-already served real static files. Capture the marker returned by the private
-subrequest and handle its `403` internally:
+Include it once inside the HTTPS `server` block, after trusted real-IP handling
+has established the real `$remote_addr`:
 
 ```nginx
-location / {
-    try_files $uri $uri/ @laravel_app;
-}
-
-location @laravel_app {
-    auth_request /_laravel_waf_gate;
-    auth_request_set $laravel_waf_gate_marker $upstream_http_x_laravel_waf_gate;
-    auth_request_set $laravel_waf_gate_retry_after $upstream_http_retry_after;
-    error_page 403 = @laravel_waf_challenge;
-    error_page 401 =403 /__laravel_waf_blocked.html;
-
-    include fastcgi_params;
-    fastcgi_param SCRIPT_FILENAME $realpath_root/index.php;
-    fastcgi_param SCRIPT_NAME /index.php;
-
-    # Never pass a public client-supplied marker to Laravel.
-    fastcgi_param HTTP_X_LARAVEL_WAF_GATE "";
-    fastcgi_pass unix:/run/php/php-fpm.sock;
-}
+include /etc/nginx/conf.d/lwafd/server.conf;
 ```
 
-Keep repeated rate-blocked traffic out of PHP. Render Laravel WAF's
-`BlockedResponse` once during deployment and install the resulting HTML at
-`/etc/nginx/laravel-waf/__laravel_waf_blocked.html`. This preserves the
-configured blocked design, theme, identity, logo, and favicon without booting
-Laravel for every denied request:
+The include owns the exact `/prometheus` proxy, the private `auth_request`
+subrequest, Laravel's named dynamic and challenge locations, direct-PHP bypass
+protection, and the static blocked response. The role renders Laravel WAF's
+full blocked design once to
+`/etc/nginx/laravel-waf/__laravel_waf_blocked.html`, so blocked traffic does not
+boot PHP. The file sits in a subdirectory of `conf.d` so a conventional
+top-level `conf.d/*.conf` wildcard cannot accidentally load server-only
+locations in the global `http` context.
 
-```nginx
-location = /__laravel_waf_blocked.html {
-    internal;
-    root /etc/nginx/laravel-waf;
-    default_type text/html;
-    charset utf-8;
-    add_header Cache-Control "no-store" always;
-    add_header Retry-After $laravel_waf_gate_retry_after always;
-    add_header X-Laravel-Waf-Blocked "true" always;
-}
-```
-
-The `=403` status override keeps the public response classified as blocked.
-The internal static URI cannot be requested directly. Regenerate the file
-whenever the Laravel WAF package or blocked-page branding changes.
-
-The named location must invoke the same Laravel `public/index.php` entry point
-as the site's normal PHP location while supplying the captured marker. Adapt
-the PHP-FPM socket and document root to the host:
-
-```nginx
-location @laravel_waf_challenge {
-    include fastcgi_params;
-    fastcgi_param SCRIPT_FILENAME $realpath_root/index.php;
-    fastcgi_param SCRIPT_NAME /index.php;
-    fastcgi_param HTTP_X_LARAVEL_WAF_GATE $laravel_waf_gate_marker;
-    fastcgi_pass unix:/run/php/php-fpm.sock;
-}
-```
-
-Keep `fastcgi_intercept_errors off` so an application-generated `403` is not
-converted into a browser challenge. Validate the complete Nginx configuration
-with `nginx -t` before reloading it.
+The role validates the complete configuration with `nginx -t`, reloads only
+after successful validation, and restores both the site and include files if a
+live probe fails.
 
 `$remote_addr` must already represent the real client. If a CDN or load balancer
 is present, configure Nginx real-IP handling only for explicitly trusted proxy
@@ -199,14 +145,17 @@ The default gate bypass prefixes are:
 
 ```text
 /_waf/challenge
-/_waf/metrics
 /_waf/blocked
-/prometheus
 ```
 
 They prevent challenge verification from challenging itself and do not consume
 the pressure threshold. Override them with `--gate-bypass-prefixes` if the
 Laravel paths were customized.
+
+The exact `/prometheus` Nginx location never invokes the gate. When iptables
+management is enabled, LWAFD also excludes `--metrics-allowed-ips` from its
+block-set DROP rule. Nginx and LWAFD still enforce the metrics source
+allowlist.
 
 Only original `GET` and `HEAD` requests are challenged by default. Configure
 `--gate-methods` only after defining how non-idempotent requests should be
@@ -230,7 +179,7 @@ laravel_waf_agent_gate_requests_total{outcome="rate_block_error"}
 Laravel records accepted gate markers as:
 
 ```text
-laravel_waf_decisions{action="challenge",scope="agent_gate",route="..."}
+laravel_waf_decisions_total{action="challenge",scope="agent_gate",route="..."}
 ```
 
 ## Rollout

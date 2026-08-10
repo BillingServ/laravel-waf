@@ -37,8 +37,6 @@
         "psr/log": "^3.0"
     },
     "suggest": {
-        "promphp/prometheus_client_php": "Enable the optional Prometheus metrics endpoint.",
-        "predis/predis": "Use Redis-backed Prometheus aggregation without the phpredis extension.",
         "geoip2/geoip2": "Enable the built-in MaxMind GeoIP2/GeoLite2 database resolver.",
         "illuminate/mail": "Enable the built-in email notification channel."
     },

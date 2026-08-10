@@ -62,8 +62,8 @@ state with:
 
 ```bash
 sudo ipset list laravel_waf_block_v4
-sudo iptables -C INPUT -p tcp -m multiport --dports 80,443 -m set --match-set laravel_waf_block_v4 src -j DROP
-sudo ip6tables -C INPUT -p tcp -m multiport --dports 80,443 -m set --match-set laravel_waf_block_v6 src -j DROP
+sudo iptables -C INPUT ! -i lo -p tcp -m multiport --dports 80,443 -m set --match-set laravel_waf_block_v4 src -m set ! --match-set laravel_waf_metrics_v4 src -j DROP
+sudo ip6tables -C INPUT ! -i lo -p tcp -m multiport --dports 80,443 -m set --match-set laravel_waf_block_v6 src -m set ! --match-set laravel_waf_metrics_v6 src -j DROP
 ```
 
 The managed rules drop only TCP traffic to ports 80 and 443. SSH, ICMP, and
@@ -81,11 +81,15 @@ sudo ./bin/lwafd \
   --secret-file /etc/laravel-waf/agent.secret
 ```
 
-The socket group must match the PHP-FPM process group. The secret file is optional but recommended. It must match `LARAVEL_WAF_SECRET` in the Laravel application. The metrics listener binds to loopback by default at `127.0.0.1:9919`; the Laravel `/prometheus` endpoint can collect it so Prometheus needs only one combined scrape target.
+The socket group must match the PHP-FPM process group. The secret file is
+optional but recommended and must match `LARAVEL_WAF_SECRET`. LWAFD also creates
+`/run/laravel-waf/metrics.sock` for signed, fire-and-forget Laravel metric
+events. Its HTTP listener binds to loopback by default at `127.0.0.1:9919` and
+exposes the unified Laravel and agent registry.
 
 To make LWAFD's own metrics browser-viewable over Tailscale, listen on all IPv4
 interfaces and allow only the required Tailscale IP or CIDR. Loopback is always
-allowed so Laravel can continue collecting the agent source:
+allowed so the Nginx HTTPS proxy can continue collecting the unified source:
 
 ```bash
 sudo ./bin/lwafd \
@@ -99,8 +103,16 @@ sudo ./bin/lwafd \
 An allowed Tailscale peer can then open
 `http://SERVER_TAILSCALE_IP:9919/metrics`. Disallowed sources receive an
 empty `404`. The allowlist uses the direct TCP peer address and ignores proxy
-headers. Use Laravel's `/prometheus` route when one response containing both
-Laravel and LWAFD metrics is required.
+headers. This direct endpoint contains both Laravel and LWAFD metrics.
+
+When LWAFD manages iptables, `--metrics-allowed-ips` also populates an
+agent-owned kernel allow-set. The WAF DROP rule applies only when a source is
+in the block set and absent from this metrics allow-set. This lets an approved
+scraper reach the HTTPS `/prometheus` route even if the same address has an
+active WAF block; Nginx and LWAFD still enforce the endpoint allowlist.
+Because iptables cannot distinguish paths inside HTTPS, approved metrics
+sources are excluded from the WAF's port 80/443 network drop as a whole. The
+pre-application gate continues denying their non-bypass dynamic requests.
 
 Use `--dry-run` while validating the integration. Start with `LARAVEL_WAF_AGENT_AUTO_BLOCK=false`; automatic host blocks should only be enabled after the application's IP and proxy configuration have been verified. When the host also runs a firewall service that rebuilds INPUT, order this service after it so the initial rules are attached last.
 
@@ -159,6 +171,8 @@ sudo ./bin/lwafd \
   --socket /run/laravel-waf/agent.sock \
   --socket-group www-data \
   --secret-file /etc/laravel-waf/agent.secret \
+  --metrics-ingest-socket /run/laravel-waf/metrics.sock \
+  --metrics-ingest-socket-group www-data \
   --gate-socket /run/laravel-waf/gate.sock \
   --gate-socket-group www-data \
   --gate-threshold 600 \
@@ -172,8 +186,8 @@ client threshold to `0` to retain aggregate challenges without gate-generated
 firewall decisions.
 
 The one secret file must exactly match `LARAVEL_WAF_SECRET`. LWAFD uses that
-value for firewall decisions, browser-pass validation, and gate markers. It
-must contain at least 32 bytes.
+value for firewall decisions, Laravel metric events, browser-pass validation,
+and gate markers. It must contain at least 32 bytes.
 
 Only `GET` and `HEAD` are challenged by default. Other methods contribute to
 traffic pressure but continue to Laravel, where the normal WAF limits still

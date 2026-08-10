@@ -66,7 +66,9 @@ func runDaemon() {
 		reconcileEvery   = flag.Duration("firewall-reconcile-interval", 30*time.Second, "interval used to restore firewall rules after a reload; zero disables periodic checks")
 		dryRun           = flag.Bool("dry-run", false, "validate requests without modifying ipset or iptables")
 		metricsAddr      = flag.String("metrics-address", "127.0.0.1:9919", "metrics listener; empty disables metrics")
-		metricsAllowed   = flag.String("metrics-allowed-ips", "", "comma-separated IPs or CIDRs allowed to access metrics; loopback is always allowed")
+		metricsAllowed   = flag.String("metrics-allowed-ips", "", "comma-separated IPs or CIDRs allowed to access metrics and exempt from the WAF kernel DROP rule; loopback is always allowed")
+		metricsSocket    = flag.String("metrics-ingest-socket", "/run/laravel-waf/metrics.sock", "Unix socket receiving signed Laravel metric events; empty disables ingestion")
+		metricsGroup     = flag.String("metrics-ingest-socket-group", "", "optional metrics-ingest socket group; defaults to socket-group")
 		gateSocket       = flag.String("gate-socket", "", "optional Unix HTTP socket used by Nginx auth_request")
 		gateGroup        = flag.String("gate-socket-group", "", "optional gate socket group; defaults to socket-group")
 		gateLimit        = flag.Uint64("gate-threshold", 600, "site-wide requests allowed in each gate window")
@@ -74,7 +76,7 @@ func runDaemon() {
 		gateWindow       = flag.Duration("gate-window", time.Minute, "fixed traffic-pressure window")
 		gateBlockTTL     = flag.Int("gate-block-ttl", gate.DefaultBlockTTLSeconds, "seconds a gate rate-limit block remains active")
 		gateMethods      = flag.String("gate-methods", "GET,HEAD", "comma-separated original methods eligible for a challenge")
-		gateBypass       = flag.String("gate-bypass-prefixes", "/_waf/challenge,/_waf/metrics,/_waf/blocked,/prometheus", "comma-separated URI prefixes excluded from the gate counter")
+		gateBypass       = flag.String("gate-bypass-prefixes", "/_waf/challenge,/_waf/blocked", "comma-separated URI prefixes excluded from the gate counter")
 		cookieName       = flag.String("challenge-cookie", "laravel_waf_challenge", "Laravel WAF pass cookie name")
 		cookieSecretFile = flag.String("challenge-secret-file", "", "optional gate cookie-secret override; defaults to secret-file")
 		gateTokenFile    = flag.String("gate-token-file", "", "optional gate marker-token override; defaults to secret-file")
@@ -104,6 +106,7 @@ func runDaemon() {
 	}
 
 	blockStore := openBlockStore(*stateFile, logger)
+	metricsSources := commaSeparated(*metricsAllowed)
 
 	sets, err := firewall.NewIPSetBackend(
 		firewall.OSCommandRunner{},
@@ -112,6 +115,19 @@ func runDaemon() {
 		*ipv6Set,
 		*maxTTL,
 		*ensureSets,
+		*dryRun,
+		logger,
+	)
+	if err != nil {
+		logger.Fatal(err)
+	}
+	metricsAllowlist, err := firewall.NewIPSetAllowlist(
+		firewall.OSCommandRunner{},
+		*ipsetPath,
+		firewall.DefaultMetricsIPv4Set,
+		firewall.DefaultMetricsIPv6Set,
+		metricsSources,
+		*manageIPTables,
 		*dryRun,
 		logger,
 	)
@@ -133,8 +149,11 @@ func runDaemon() {
 	if err != nil {
 		logger.Fatal(err)
 	}
+	if err := rules.UseSourceAllowlist(metricsAllowlist.IPv4Set, metricsAllowlist.IPv6Set); err != nil {
+		logger.Fatal(err)
+	}
 
-	backend, err := firewall.NewManagedBackend(sets, rules)
+	backend, err := firewall.NewManagedBackend(sets, metricsAllowlist, rules)
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -156,14 +175,14 @@ func runDaemon() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	errors := make(chan error, 3)
+	errors := make(chan error, 4)
 
 	if *manageIPTables && !*dryRun && *reconcileEvery > 0 {
 		go reconcileFirewallRules(ctx, backend, *reconcileEvery, logger)
 	}
 
 	if *metricsAddr != "" {
-		metricsHandler, err := metrics.NewHTTPHandler(registry, commaSeparated(*metricsAllowed))
+		metricsHandler, err := metrics.NewHTTPHandler(registry, metricsSources)
 		if err != nil {
 			logger.Fatal(err)
 		}
@@ -185,6 +204,22 @@ func runDaemon() {
 			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				errors <- fmt.Errorf("serve metrics: %w", err)
 			}
+		}()
+	}
+
+	if strings.TrimSpace(*metricsSocket) != "" {
+		group := *metricsGroup
+		if group == "" {
+			group = *socketGroup
+		}
+		logger.Printf("Laravel metrics ingest listening on %s", *metricsSocket)
+		go func() {
+			errors <- (&metrics.IngestServer{
+				Socket:      *metricsSocket,
+				SocketGroup: group,
+				Secret:      secret,
+				Registry:    registry,
+			}).ListenAndServe(ctx)
 		}()
 	}
 
@@ -449,7 +484,7 @@ func reconcileFirewallRules(ctx context.Context, backend *firewall.ManagedBacken
 			return
 		case <-ticker.C:
 			operationContext, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := backend.EnsureRules(operationContext)
+			err := backend.EnsurePolicy(operationContext)
 			cancel()
 			if err != nil && ctx.Err() == nil {
 				logger.Printf("firewall rule reconciliation failed: %v", err)

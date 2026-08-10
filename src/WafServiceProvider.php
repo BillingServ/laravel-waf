@@ -2,13 +2,11 @@
 
 namespace BillingServ\LaravelWaf;
 
-use BillingServ\LaravelWaf\Contracts\AgentMetricsSource;
 use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
 use BillingServ\LaravelWaf\Contracts\ChallengeVerifier;
 use BillingServ\LaravelWaf\Contracts\DecisionSink;
 use BillingServ\LaravelWaf\Contracts\GeoIpResolver;
 use BillingServ\LaravelWaf\Contracts\InspectionRule;
-use BillingServ\LaravelWaf\Contracts\MetricsRenderer;
 use BillingServ\LaravelWaf\Contracts\MetricsSink;
 use BillingServ\LaravelWaf\Contracts\NotificationSink;
 use BillingServ\LaravelWaf\Http\Middleware\DdosProtection;
@@ -38,7 +36,6 @@ use BillingServ\LaravelWaf\Support\AgentBlocker;
 use BillingServ\LaravelWaf\Support\AltchaVerifier;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\LaravelNotificationSink;
-use BillingServ\LaravelWaf\Support\LoopbackAgentMetricsSource;
 use BillingServ\LaravelWaf\Support\MaxMindGeoIpResolver;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\NullChallengeVerifier;
@@ -46,11 +43,10 @@ use BillingServ\LaravelWaf\Support\NullDecisionSink;
 use BillingServ\LaravelWaf\Support\NullGeoIpResolver;
 use BillingServ\LaravelWaf\Support\NullMetricsSink;
 use BillingServ\LaravelWaf\Support\OutboundUrlGuard;
-use BillingServ\LaravelWaf\Support\PrometheusMetricsSink;
-use BillingServ\LaravelWaf\Support\PrometheusRegistryRenderer;
 use BillingServ\LaravelWaf\Support\SecurityHeaders;
 use BillingServ\LaravelWaf\Support\SecurityNotifier;
 use BillingServ\LaravelWaf\Support\UnixSocketDecisionSink;
+use BillingServ\LaravelWaf\Support\UnixSocketMetricsSink;
 use Illuminate\Cache\RateLimiter;
 use Illuminate\Cache\Repository;
 use Illuminate\Routing\Router;
@@ -73,29 +69,19 @@ final class WafServiceProvider extends ServiceProvider
 
         $this->app->singleton(MetricsSink::class, function (): MetricsSink {
             if (!config('laravel-waf.metrics.enabled', false)
-                || !class_exists('Prometheus\\CollectorRegistry')) {
+                || !config('laravel-waf.agent.enabled', false)) {
                 return new NullMetricsSink();
             }
 
-            try {
-                return new PrometheusMetricsSink(
-                    \Prometheus\CollectorRegistry::getDefault(),
-                    (string) config('laravel-waf.metrics.namespace', 'laravel_waf'),
-                );
-            } catch (\Throwable) {
-                return new NullMetricsSink();
-            }
+            return new UnixSocketMetricsSink(
+                (string) config('laravel-waf.metrics.ingest.socket', '/run/laravel-waf/metrics.sock'),
+                config('laravel-waf.metrics.ingest.secret', config('laravel-waf.agent.secret')),
+                (int) config('laravel-waf.metrics.ingest.timeout_ms', 1),
+            );
         });
 
         $this->app->singleton(MetricsRecorder::class, fn ($app): MetricsRecorder => new MetricsRecorder(
             $app->make(MetricsSink::class),
-        ));
-
-        $this->app->singleton(MetricsRenderer::class, static fn (): MetricsRenderer => new PrometheusRegistryRenderer());
-        $this->app->singleton(AgentMetricsSource::class, static fn (): AgentMetricsSource => new LoopbackAgentMetricsSource(
-            (string) config('laravel-waf.metrics.agent.endpoint', 'http://127.0.0.1:9919/metrics'),
-            (int) config('laravel-waf.metrics.agent.timeout_ms', 100),
-            (int) config('laravel-waf.metrics.agent.max_response_bytes', 1048576),
         ));
 
         $this->app->singleton(RequestInputCollector::class, static fn (): RequestInputCollector => new RequestInputCollector());
@@ -253,6 +239,7 @@ final class WafServiceProvider extends ServiceProvider
             'laravel-waf.challenge.altcha.hmac_key',
             'laravel-waf.agent.secret',
             'laravel-waf.agent.gate.token',
+            'laravel-waf.metrics.ingest.secret',
         ] as $key) {
             $value = $config->get($key);
             if ($value === null || $value === '') {
@@ -287,10 +274,6 @@ final class WafServiceProvider extends ServiceProvider
 
         if (config('laravel-waf.challenge.enabled', false)) {
             $this->loadRoutesFrom(__DIR__.'/../routes/challenge.php');
-        }
-
-        if (config('laravel-waf.metrics.enabled', false)) {
-            $this->loadRoutesFrom(__DIR__.'/../routes/metrics.php');
         }
     }
 

@@ -17,8 +17,9 @@ mkdir -p "$agent_dir/bin"
 
 cd "$agent_dir"
 CGO_ENABLED=${CGO_ENABLED:-0} GOOS="$target_os" GOARCH="$target_arch" go build \
+    -buildvcs=false \
     -trimpath \
-    -ldflags "-s -w -X main.programName=$binary_name" \
+    -ldflags "-s -w -buildid= -X main.programName=$binary_name" \
     -o "$agent_dir/bin/$binary_name" \
     ./cmd/lwafd
 

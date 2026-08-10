@@ -192,7 +192,7 @@ func TestGatePassCookieKeepsVerifiedClientOutOfAutomaticBlocking(t *testing.T) {
 	}
 }
 
-func TestGateDeniesAnObservedLaravelBlockAndRetainsTheBlockedPageBypass(t *testing.T) {
+func TestGateDeniesAnObservedLaravelBlockAndRetainsInternalBypasses(t *testing.T) {
 	blocker := &recordingBlocker{}
 	handler := newClientTestHandler(t, 1000, DefaultClientThreshold, blocker)
 	ip := net.ParseIP("203.0.113.90")
@@ -222,7 +222,7 @@ func newTestHandler(t *testing.T, threshold uint64) *Handler {
 		CookieName:      "laravel_waf_challenge",
 		ChallengeSecret: []byte("test-challenge-secret-with-32-bytes"),
 		MarkerToken:     "test-gate-marker-token-with-32-bytes",
-		BypassPrefixes:  []string{"/_waf/challenge", "/_waf/metrics"},
+		BypassPrefixes:  []string{"/_waf/challenge"},
 	}, metrics.NewRegistry(), nil)
 	if err != nil {
 		t.Fatalf("create gate handler: %v", err)
@@ -242,7 +242,7 @@ func newClientTestHandler(t *testing.T, threshold, clientThreshold uint64, block
 		CookieName:      "laravel_waf_challenge",
 		ChallengeSecret: []byte("test-challenge-secret-with-32-bytes"),
 		MarkerToken:     "test-gate-marker-token-with-32-bytes",
-		BypassPrefixes:  []string{"/_waf/challenge", "/_waf/metrics", "/_waf/blocked"},
+		BypassPrefixes:  []string{"/_waf/challenge", "/_waf/blocked"},
 	}, metrics.NewRegistry(), blocker)
 	if err != nil {
 		t.Fatalf("create client gate handler: %v", err)

@@ -28,17 +28,22 @@ func (b *fakeSetBackend) Unblock(context.Context, net.IP) error {
 
 type fakeRuleManager struct {
 	events *[]string
+	event  string
 	err    error
 }
 
 func (m *fakeRuleManager) Ensure(context.Context) error {
-	*m.events = append(*m.events, "rules.ensure")
+	event := m.event
+	if event == "" {
+		event = "rules.ensure"
+	}
+	*m.events = append(*m.events, event)
 	return m.err
 }
 
 func TestManagedBackendEnsuresRuleBeforeBlock(t *testing.T) {
 	events := []string{}
-	backend, err := NewManagedBackend(&fakeSetBackend{events: &events}, &fakeRuleManager{events: &events})
+	backend, err := NewManagedBackend(&fakeSetBackend{events: &events}, nil, &fakeRuleManager{events: &events})
 	if err != nil {
 		t.Fatalf("create backend: %v", err)
 	}
@@ -52,10 +57,37 @@ func TestManagedBackendEnsuresRuleBeforeBlock(t *testing.T) {
 	}
 }
 
+func TestManagedBackendEnsuresAllowlistBeforeFirewallRules(t *testing.T) {
+	events := []string{}
+	backend, err := NewManagedBackend(
+		&fakeSetBackend{events: &events},
+		&fakeRuleManager{events: &events, event: "allowlist.ensure"},
+		&fakeRuleManager{events: &events, event: "firewall.ensure"},
+	)
+	if err != nil {
+		t.Fatalf("create backend: %v", err)
+	}
+
+	if err := backend.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure backend: %v", err)
+	}
+
+	expected := []string{"sets.ensure", "allowlist.ensure", "firewall.ensure"}
+	if len(events) != len(expected) {
+		t.Fatalf("unexpected operations: %#v", events)
+	}
+	for index := range expected {
+		if events[index] != expected[index] {
+			t.Fatalf("allowlist was not installed before firewall rules: %#v", events)
+		}
+	}
+}
+
 func TestManagedBackendDoesNotAddIPWhenRuleCannotBeEnsured(t *testing.T) {
 	events := []string{}
 	backend, err := NewManagedBackend(
 		&fakeSetBackend{events: &events},
+		nil,
 		&fakeRuleManager{events: &events, err: errors.New("iptables failed")},
 	)
 	if err != nil {

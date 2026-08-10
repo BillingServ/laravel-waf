@@ -88,6 +88,60 @@ func TestIPTablesEnsureDoesNotDuplicateExistingRules(t *testing.T) {
 	}
 }
 
+func TestIPTablesEnsureExemptsMetricsSourcesFromTheWAFDropRule(t *testing.T) {
+	missing := errors.New("rule does not exist")
+	runner := &scriptedRunner{results: []error{
+		missing, nil, missing, missing, nil, nil,
+		missing, nil, missing, missing, nil, nil,
+	}}
+	manager, err := NewIPTablesRuleManager(
+		runner,
+		"/usr/sbin/iptables",
+		"/usr/sbin/ip6tables",
+		"waf_v4",
+		"waf_v6",
+		"80,443",
+		true,
+		false,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create rule manager: %v", err)
+	}
+	if err := manager.UseSourceAllowlist("waf_metrics_v4", "waf_metrics_v6"); err != nil {
+		t.Fatalf("configure source allowlist: %v", err)
+	}
+
+	if err := manager.Ensure(context.Background()); err != nil {
+		t.Fatalf("ensure rules: %v", err)
+	}
+
+	expectedInsert := []string{
+		"-w", "5", "-I", "INPUT", "1",
+		"!", "-i", "lo",
+		"-p", "tcp",
+		"-m", "multiport", "--dports", "80,443",
+		"-m", "set", "--match-set", "waf_v4", "src",
+		"-m", "set", "!", "--match-set", "waf_metrics_v4", "src",
+		"-j", "DROP",
+	}
+	if !reflect.DeepEqual(expectedInsert, runner.calls[1].args) {
+		t.Fatalf("IPv4 rule did not exempt the metrics allow-set: %#v", runner.calls)
+	}
+
+	expectedOldRuleDelete := []string{
+		"-w", "5", "-D", "INPUT",
+		"!", "-i", "lo",
+		"-p", "tcp",
+		"-m", "multiport", "--dports", "80,443",
+		"-m", "set", "--match-set", "waf_v4", "src",
+		"-j", "DROP",
+	}
+	if !reflect.DeepEqual(expectedOldRuleDelete, runner.calls[5].args) {
+		t.Fatalf("old IPv4 rule remained able to block metrics sources: %#v", runner.calls)
+	}
+}
+
 func TestIPTablesEnsureReportsInsertFailure(t *testing.T) {
 	missing := errors.New("rule does not exist")
 	insertFailure := errors.New("permission denied")

@@ -17,12 +17,28 @@ type IPTablesRuleManager struct {
 	IPv6Executable string
 	IPv4Set        string
 	IPv6Set        string
+	IPv4AllowSet   string
+	IPv6AllowSet   string
 	TCPPorts       string
 	Enabled        bool
 	DryRun         bool
 	Logger         *log.Logger
 
 	mu sync.Mutex
+}
+
+func (m *IPTablesRuleManager) UseSourceAllowlist(ipv4Set, ipv6Set string) error {
+	if !safeSetName.MatchString(ipv4Set) || !safeSetName.MatchString(ipv6Set) || ipv4Set == ipv6Set {
+		return fmt.Errorf("invalid source allow ipset name")
+	}
+	if ipv4Set == m.IPv4Set || ipv4Set == m.IPv6Set || ipv6Set == m.IPv4Set || ipv6Set == m.IPv6Set {
+		return fmt.Errorf("source allow and block ipsets must be distinct")
+	}
+
+	m.IPv4AllowSet = ipv4Set
+	m.IPv6AllowSet = ipv6Set
+
+	return nil
 }
 
 func NewIPTablesRuleManager(
@@ -79,18 +95,22 @@ func (m *IPTablesRuleManager) Ensure(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := m.ensureRule(ctx, m.IPv4Executable, m.IPv4Set); err != nil {
+	if err := m.ensureRule(ctx, m.IPv4Executable, m.IPv4Set, m.IPv4AllowSet); err != nil {
 		return fmt.Errorf("ensure IPv4 iptables rule: %w", err)
 	}
 
-	if err := m.ensureRule(ctx, m.IPv6Executable, m.IPv6Set); err != nil {
+	if err := m.ensureRule(ctx, m.IPv6Executable, m.IPv6Set, m.IPv6AllowSet); err != nil {
 		return fmt.Errorf("ensure IPv6 iptables rule: %w", err)
 	}
 
 	return nil
 }
 
-func (m *IPTablesRuleManager) ensureRule(ctx context.Context, executable, set string) error {
+func (m *IPTablesRuleManager) ensureRule(ctx context.Context, executable, set, allowSet string) error {
+	if allowSet != "" {
+		return m.ensureRuleWithAllowlist(ctx, executable, set, allowSet)
+	}
+
 	if err := m.removeLegacyAllTrafficRule(ctx, executable, set); err != nil {
 		return err
 	}
@@ -98,14 +118,42 @@ func (m *IPTablesRuleManager) ensureRule(ctx context.Context, executable, set st
 		return err
 	}
 
+	rule := m.blockRule(set, "")
+	return m.ensureManagedRule(ctx, executable, set, rule)
+}
+
+func (m *IPTablesRuleManager) ensureRuleWithAllowlist(ctx context.Context, executable, set, allowSet string) error {
+	// Install the replacement before deleting older variants so non-allowlisted
+	// blocked sources never see a fail-open migration window.
+	if err := m.ensureManagedRule(ctx, executable, set, m.blockRule(set, allowSet)); err != nil {
+		return err
+	}
+	if err := m.removeLegacyAllTrafficRule(ctx, executable, set); err != nil {
+		return err
+	}
+	if err := m.removeLoopbackUnsafeRule(ctx, executable, set); err != nil {
+		return err
+	}
+
+	return m.removeUnexemptedRule(ctx, executable, set)
+}
+
+func (m *IPTablesRuleManager) blockRule(set, allowSet string) []string {
 	rule := []string{
 		"INPUT",
 		"!", "-i", "lo",
 		"-p", "tcp",
 		"-m", "multiport", "--dports", m.TCPPorts,
 		"-m", "set", "--match-set", set, "src",
-		"-j", "DROP",
 	}
+	if allowSet != "" {
+		rule = append(rule, "-m", "set", "!", "--match-set", allowSet, "src")
+	}
+
+	return append(rule, "-j", "DROP")
+}
+
+func (m *IPTablesRuleManager) ensureManagedRule(ctx context.Context, executable, set string, rule []string) error {
 	check := append([]string{"-w", "5", "-C"}, rule...)
 	if err := m.Runner.Run(ctx, executable, check...); err == nil {
 		return nil
@@ -124,6 +172,29 @@ func (m *IPTablesRuleManager) ensureRule(ctx context.Context, executable, set st
 
 	if m.Logger != nil {
 		m.Logger.Printf("attached firewall rule to ipset %s", set)
+	}
+
+	return nil
+}
+
+func (m *IPTablesRuleManager) removeUnexemptedRule(ctx context.Context, executable, set string) error {
+	rule := m.blockRule(set, "")
+	check := append([]string{"-w", "5", "-C"}, rule...)
+	if err := m.Runner.Run(ctx, executable, check...); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+
+		return nil
+	}
+
+	remove := append([]string{"-w", "5", "-D"}, rule...)
+	if err := m.Runner.Run(ctx, executable, remove...); err != nil {
+		return fmt.Errorf("remove unexempted firewall rule: %w", err)
+	}
+
+	if m.Logger != nil {
+		m.Logger.Printf("removed unexempted firewall rule for ipset %s", set)
 	}
 
 	return nil

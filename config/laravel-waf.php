@@ -44,7 +44,6 @@ return [
         'status' => 429,
         'fail_mode' => env('LARAVEL_WAF_DDOS_FAIL_MODE', 'open'), // open|closed
         'exempt_routes' => [
-            'laravel-waf.metrics',
             'laravel-waf.challenge.verify',
             'laravel-waf.blocked',
         ],
@@ -67,7 +66,6 @@ return [
         'fail_mode' => env('LARAVEL_WAF_RULES_FAIL_MODE', 'open'), // open|closed
         'max_findings' => (int) env('LARAVEL_WAF_RULES_MAX_FINDINGS', 3),
         'skip_routes' => [
-            'laravel-waf.metrics',
             'laravel-waf.challenge.verify',
             'laravel-waf.blocked',
         ],
@@ -342,20 +340,12 @@ return [
 
     'metrics' => [
         'enabled' => env('LARAVEL_WAF_METRICS_ENABLED', false),
-        'route' => env('LARAVEL_WAF_METRICS_ROUTE', 'prometheus'),
-        'allowed_ips' => array_values(array_filter(array_map(
-            static fn (string $ip): string => trim($ip),
-            explode(',', (string) env('LARAVEL_WAF_METRICS_ALLOWED_IPS', '127.0.0.1,::1')),
-        ), static fn (string $ip): bool => $ip !== '')),
-        'middleware' => [],
-        'namespace' => 'laravel_waf',
-        'agent' => [
-            // This source must remain loopback-only; the Laravel route is the
-            // single externally scraped endpoint.
-            'enabled' => env('LARAVEL_WAF_METRICS_INCLUDE_AGENT', true),
-            'endpoint' => env('LARAVEL_WAF_METRICS_AGENT_ENDPOINT', 'http://127.0.0.1:9919/metrics'),
-            'timeout_ms' => 100,
-            'max_response_bytes' => 1048576,
+        'ingest' => [
+            // Laravel sends signed, fire-and-forget events to LWAFD. These
+            // defaults intentionally reuse the one deployment secret.
+            'socket' => env('LARAVEL_WAF_METRICS_SOCKET', '/run/laravel-waf/metrics.sock'),
+            'secret' => $secret,
+            'timeout_ms' => 1,
         ],
     ],
 ];

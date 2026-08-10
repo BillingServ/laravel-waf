@@ -82,11 +82,14 @@ LARAVEL_WAF_METRICS_ALLOWED_IPS=replace-with-allowed-source-ip-or-cidr
 `balanced` enables the automatic ALTCHA challenge flow, adaptive traffic
 pressure, reject-mode request and behaviour rules, and automatic login,
 rate-limit, and finding block decisions. The agent itself and the metrics
-route remain explicit because they require local infrastructure and access
-controls. `LARAVEL_WAF_SECRET` is the default for agent decisions, the Nginx
-gate marker, browser-pass cookies, and ALTCHA verification. Existing granular
-secret variables remain supported as overrides for older deployments. The
-ALTCHA challenge-generating endpoint must use the same secret.
+pipeline remain explicit because they require local infrastructure and access
+controls. `LARAVEL_WAF_ADAPTIVE_ENABLED=false` is deliberate when the Go gate
+is enabled: LWAFD owns site-wide pressure, so Laravel must not run a second
+adaptive counter. `LARAVEL_WAF_SECRET` is the default for agent decisions,
+metric events, the Nginx gate marker, browser-pass cookies, and ALTCHA
+verification. Existing granular secret variables remain supported as
+overrides for older deployments. The ALTCHA challenge-generating endpoint must
+use the same secret.
 
 The default `standard` preset preserves the package's existing conservative
 defaults. Any granular `LARAVEL_WAF_*` variable continues to override its
@@ -115,16 +118,14 @@ already been saturated by a volumetric attack.
 
 ## Prometheus
 
-Prometheus support is optional:
-
-```bash
-composer require promphp/prometheus_client_php
-```
-
-When metrics are enabled, Prometheus can scrape one configurable `/prometheus`
-endpoint containing both Laravel and agent metrics. LWAFD can also expose its
-own browser-viewable `:9919/metrics` endpoint behind an exact IP or CIDR
-allowlist. See [`docs/metrics.md`](docs/metrics.md).
+LWAFD owns one Prometheus registry containing Laravel and agent metrics; no PHP
+Prometheus package or Redis metrics store is required. Laravel sends bounded,
+signed events over a separate Unix socket without waiting for a response.
+Prometheus can scrape the Tailnet-restricted HTTPS `/prometheus` proxy or the
+browser-viewable LWAFD `:9919/metrics` endpoint. The same source allowlist is
+excluded from the WAF kernel DROP rule, so an approved scraper remains able to
+collect metrics during an active WAF block. See
+[`docs/metrics.md`](docs/metrics.md).
 
 Metric labels are bounded: IP addresses, URLs, query strings, headers, user
 IDs, request bodies, and attack payloads are not used as labels.

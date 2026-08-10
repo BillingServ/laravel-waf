@@ -19,21 +19,32 @@ type RuleManager interface {
 // ManagedBackend keeps the static firewall rules attached while delegating
 // timed membership to ipset.
 type ManagedBackend struct {
-	Sets  SetBackend
-	Rules RuleManager
+	Sets         SetBackend
+	Prerequisite RuleManager
+	Rules        RuleManager
 }
 
-func NewManagedBackend(sets SetBackend, rules RuleManager) (*ManagedBackend, error) {
+func NewManagedBackend(sets SetBackend, prerequisite, rules RuleManager) (*ManagedBackend, error) {
 	if sets == nil || rules == nil {
 		return nil, fmt.Errorf("ipset backend and firewall rule manager are required")
 	}
 
-	return &ManagedBackend{Sets: sets, Rules: rules}, nil
+	return &ManagedBackend{Sets: sets, Prerequisite: prerequisite, Rules: rules}, nil
 }
 
 func (b *ManagedBackend) Ensure(ctx context.Context) error {
 	if err := b.Sets.Ensure(ctx); err != nil {
 		return err
+	}
+
+	return b.EnsurePolicy(ctx)
+}
+
+func (b *ManagedBackend) EnsurePolicy(ctx context.Context) error {
+	if b.Prerequisite != nil {
+		if err := b.Prerequisite.Ensure(ctx); err != nil {
+			return fmt.Errorf("ensure firewall prerequisite: %w", err)
+		}
 	}
 
 	return b.EnsureRules(ctx)

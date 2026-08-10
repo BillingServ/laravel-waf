@@ -24,15 +24,17 @@ go test ./...
 ```
 
 The build script writes a stripped, static Linux AMD64 executable to
-`bin/lwafd`. Override the standard Go target variables when building for
-another Linux architecture:
+`bin/lwafd` and embeds the current Git revision in its Prometheus build-info
+metric. Override the standard Go target variables when building for another
+Linux architecture:
 
 ```bash
 GOARCH=arm64 ./build.sh
 ```
 
 Set `BINARY_NAME` to choose a different executable name without changing the
-source.
+source. Set `LWAFD_VERSION` only when a release pipeline needs to supply an
+explicit version instead of the Git revision.
 
 The agent is Linux-only because it invokes `ipset`.
 
@@ -104,6 +106,19 @@ An allowed Tailscale peer can then open
 `http://SERVER_TAILSCALE_IP:9919/metrics`. Disallowed sources receive an
 empty `404`. The allowlist uses the direct TCP peer address and ignores proxy
 headers. This direct endpoint contains both Laravel and LWAFD metrics.
+
+Every exported sample carries `instance="HOSTNAME"`, and the registry includes
+the discovery series:
+
+```text
+laravel_waf_info{instance="app.example.com",application="lwafd",version="REVISION"} 1
+```
+
+LWAFD uses the operating-system hostname by default. Pass
+`--metrics-instance app.example.com` when the dashboard identity must differ
+from that hostname. Prometheus must use `honor_labels: true` to preserve this
+exporter-supplied `instance` label instead of replacing it with the Tailnet
+scrape address.
 
 When LWAFD manages iptables, `--metrics-allowed-ips` also populates an
 agent-owned kernel allow-set. The WAF DROP rule applies only when a source is

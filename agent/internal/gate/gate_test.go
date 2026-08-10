@@ -223,7 +223,7 @@ func newTestHandler(t *testing.T, threshold uint64) *Handler {
 		ChallengeSecret: []byte("test-challenge-secret-with-32-bytes"),
 		MarkerToken:     "test-gate-marker-token-with-32-bytes",
 		BypassPrefixes:  []string{"/_waf/challenge"},
-	}, metrics.NewRegistry(), nil)
+	}, metrics.NewRegistry("test.example", "test"), nil)
 	if err != nil {
 		t.Fatalf("create gate handler: %v", err)
 	}
@@ -243,7 +243,7 @@ func newClientTestHandler(t *testing.T, threshold, clientThreshold uint64, block
 		ChallengeSecret: []byte("test-challenge-secret-with-32-bytes"),
 		MarkerToken:     "test-gate-marker-token-with-32-bytes",
 		BypassPrefixes:  []string{"/_waf/challenge", "/_waf/blocked"},
-	}, metrics.NewRegistry(), blocker)
+	}, metrics.NewRegistry("test.example", "test"), blocker)
 	if err != nil {
 		t.Fatalf("create client gate handler: %v", err)
 	}

@@ -15,6 +15,16 @@ Browser over Tailscale ─────────────→ LWAFD :9919/me
 
 Both URLs expose the same unified registry. Scrape one of them, not both.
 
+LWAFD puts its hostname in the `instance` label on every series and publishes
+an always-present discovery metric:
+
+```text
+laravel_waf_info{instance="app.example.com",application="lwafd",version="REVISION"} 1
+```
+
+The operating-system hostname is used automatically. The advanced
+`--metrics-instance` agent option can override it when required.
+
 ## Configuration
 
 No PHP Prometheus package or Redis metrics store is required. Enable the agent
@@ -100,9 +110,10 @@ Through Nginx and the site's TLS endpoint:
 
 ```yaml
 scrape_configs:
-  - job_name: laravel-waf
+  - job_name: lwafd
     metrics_path: /prometheus
     scheme: https
+    honor_labels: true
     static_configs:
       - targets:
           - waf-server.tailnet-name.ts.net
@@ -112,9 +123,10 @@ Or directly from LWAFD over Tailscale:
 
 ```yaml
 scrape_configs:
-  - job_name: laravel-waf
+  - job_name: lwafd
     metrics_path: /metrics
     scheme: http
+    honor_labels: true
     static_configs:
       - targets:
           - "SERVER_TAILSCALE_IP:9919"
@@ -148,3 +160,20 @@ restart. Do not add IP addresses, raw paths, query strings, headers, user IDs,
 request bodies, or attack payloads as labels. Use redacted logs for event-level
 investigation and combine these metrics with Nginx, PHP-FPM, host, bandwidth,
 and firewall metrics in Grafana.
+
+## Empty Laravel metric families
+
+Prometheus exposition includes `HELP` and `TYPE` lines before a metric has any
+observations. LWAFD always emits each known metric-ingest outcome, including:
+
+```text
+laravel_waf_agent_metric_events_total{instance="app.example.com",outcome="accepted"} 0
+```
+
+If `accepted` remains zero after a request reaches Laravel, no application
+metric event has entered the registry. Confirm the deployed Laravel package
+contains the Unix-socket metrics sink, both agent and metrics settings are
+enabled, cached Laravel configuration has been cleared, and the PHP-FPM user
+can traverse `/run/laravel-waf` and write to `metrics.sock`. A non-zero
+`rejected` or `rejected_schema` outcome instead means LWAFD received an event
+but rejected its signature or schema.

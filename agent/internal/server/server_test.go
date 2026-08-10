@@ -88,7 +88,7 @@ func TestHandleRecordsAcceptedBlockReason(t *testing.T) {
 		MaxTTL:   protocol.MaxTTLSeconds,
 		Backend:  backend,
 		Store:    store,
-		Metrics:  metrics.NewRegistry(),
+		Metrics:  metrics.NewRegistry("test.example", "test"),
 		Observer: observer,
 	}
 
@@ -136,7 +136,7 @@ func TestLocalBlockUsesTheDecisionFirewallAndAuditPath(t *testing.T) {
 		MaxTTL:  protocol.MaxTTLSeconds,
 		Backend: backend,
 		Store:   store,
-		Metrics: metrics.NewRegistry(),
+		Metrics: metrics.NewRegistry("test.example", "test"),
 	}
 
 	if err := service.Block(context.Background(), net.ParseIP("203.0.113.20"), 900, "gate_rate_limit"); err != nil {
@@ -170,7 +170,7 @@ func TestHandleAcceptsFirewallOperationWhenAuditStoreFails(t *testing.T) {
 	for _, decision := range tests {
 		t.Run(decision.Action, func(t *testing.T) {
 			backend := &recordingBackend{}
-			registry := metrics.NewRegistry()
+			registry := metrics.NewRegistry("test.example", "test")
 			service := &Server{
 				MaxTTL:  protocol.MaxTTLSeconds,
 				Backend: backend,

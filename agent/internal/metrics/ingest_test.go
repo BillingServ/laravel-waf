@@ -12,7 +12,7 @@ import (
 )
 
 func TestIngestServerRecordsSignedLaravelMetrics(t *testing.T) {
-	registry := NewRegistry()
+	registry := NewRegistry("test.example", "test")
 	secret := []byte("test-secret")
 	server := &IngestServer{Secret: secret, Registry: registry}
 	event := protocol.MetricEvent{
@@ -35,16 +35,16 @@ func TestIngestServerRecordsSignedLaravelMetrics(t *testing.T) {
 	response := httptest.NewRecorder()
 	registry.Handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
 	body := response.Body.String()
-	if !strings.Contains(body, `laravel_waf_findings_total{category="xss",rule="script_tag",action="reject",route="admin.login"} 1`) {
+	if !strings.Contains(body, `laravel_waf_findings_total{instance="test.example",category="xss",rule="script_tag",action="reject",route="admin.login"} 1`) {
 		t.Fatalf("Laravel metric was not exposed: %s", body)
 	}
-	if !strings.Contains(body, `laravel_waf_agent_metric_events_total{outcome="accepted"} 1`) {
+	if !strings.Contains(body, `laravel_waf_agent_metric_events_total{instance="test.example",outcome="accepted"} 1`) {
 		t.Fatalf("accepted ingest was not exposed: %s", body)
 	}
 }
 
 func TestIngestServerRejectsInvalidSignature(t *testing.T) {
-	registry := NewRegistry()
+	registry := NewRegistry("test.example", "test")
 	server := &IngestServer{Secret: []byte("correct-secret"), Registry: registry}
 	event := protocol.MetricEvent{
 		Version:   protocol.Version,
@@ -59,16 +59,16 @@ func TestIngestServerRejectsInvalidSignature(t *testing.T) {
 	sendMetricEvent(t, server, event)
 
 	body := registry.render()
-	if strings.Contains(body, `laravel_waf_errors_total{component="rate_limiter"}`) {
+	if strings.Contains(body, `laravel_waf_errors_total{instance="test.example",component="rate_limiter"}`) {
 		t.Fatalf("rejected metric was exposed: %s", body)
 	}
-	if !strings.Contains(body, `laravel_waf_agent_metric_events_total{outcome="rejected"} 1`) {
+	if !strings.Contains(body, `laravel_waf_agent_metric_events_total{instance="test.example",outcome="rejected"} 1`) {
 		t.Fatalf("rejected ingest was not exposed: %s", body)
 	}
 }
 
 func TestRegistryRendersPrometheusHistogram(t *testing.T) {
-	registry := NewRegistry()
+	registry := NewRegistry("test.example", "test")
 	event := protocol.MetricEvent{
 		Version:   protocol.Version,
 		Action:    protocol.MetricAction,
@@ -83,10 +83,10 @@ func TestRegistryRendersPrometheusHistogram(t *testing.T) {
 
 	body := registry.render()
 	for _, expected := range []string{
-		`laravel_waf_evaluation_duration_seconds_bucket{le="0.025"} 1`,
-		`laravel_waf_evaluation_duration_seconds_bucket{le="+Inf"} 1`,
-		`laravel_waf_evaluation_duration_seconds_sum 0.025`,
-		`laravel_waf_evaluation_duration_seconds_count 1`,
+		`laravel_waf_evaluation_duration_seconds_bucket{instance="test.example",le="0.025"} 1`,
+		`laravel_waf_evaluation_duration_seconds_bucket{instance="test.example",le="+Inf"} 1`,
+		`laravel_waf_evaluation_duration_seconds_sum{instance="test.example"} 0.025`,
+		`laravel_waf_evaluation_duration_seconds_count{instance="test.example"} 1`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("missing %q from histogram: %s", expected, body)
@@ -95,7 +95,7 @@ func TestRegistryRendersPrometheusHistogram(t *testing.T) {
 }
 
 func TestRegistryRejectsAnInvalidMetricEventWhenCalledDirectly(t *testing.T) {
-	registry := NewRegistry()
+	registry := NewRegistry("test.example", "test")
 	event := protocol.MetricEvent{
 		Version:   protocol.Version,
 		Action:    protocol.MetricAction,
@@ -108,7 +108,7 @@ func TestRegistryRejectsAnInvalidMetricEventWhenCalledDirectly(t *testing.T) {
 	if err := registry.RecordMetric(event); err == nil {
 		t.Fatal("expected invalid counter value to be rejected")
 	}
-	if strings.Contains(registry.render(), `laravel_waf_errors_total{component="rate_limiter"}`) {
+	if strings.Contains(registry.render(), `laravel_waf_errors_total{instance="test.example",component="rate_limiter"}`) {
 		t.Fatal("invalid metric was recorded")
 	}
 }

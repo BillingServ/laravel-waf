@@ -8,7 +8,7 @@ import (
 )
 
 func TestHTTPHandlerAllowsConfiguredCIDR(t *testing.T) {
-	registry := NewRegistry()
+	registry := NewRegistry("test.example", "test")
 	registry.Decision("block_ip", "accepted")
 	handler, err := NewHTTPHandler(registry, []string{"192.0.2.0/24"})
 	if err != nil {
@@ -28,8 +28,29 @@ func TestHTTPHandlerAllowsConfiguredCIDR(t *testing.T) {
 	}
 }
 
+func TestRegistryExportsHostIdentityAndZeroIngestOutcomes(t *testing.T) {
+	registry := NewRegistry("dev.bserv.dev", "abc123")
+	registry.Decision("block_ip", "accepted")
+	registry.Operation("block", "accepted", "ipv4")
+	registry.Gate("allowed")
+
+	body := registry.render()
+	for _, expected := range []string{
+		`laravel_waf_info{instance="dev.bserv.dev",application="lwafd",version="abc123"} 1`,
+		`laravel_waf_agent_decisions_total{instance="dev.bserv.dev",action="block_ip",outcome="accepted"} 1`,
+		`laravel_waf_agent_firewall_operations_total{instance="dev.bserv.dev",family="ipv4",operation="block",outcome="accepted"} 1`,
+		`laravel_waf_agent_gate_requests_total{instance="dev.bserv.dev",outcome="allowed"} 1`,
+		`laravel_waf_agent_metric_events_total{instance="dev.bserv.dev",outcome="accepted"} 0`,
+		`laravel_waf_agent_metric_events_total{instance="dev.bserv.dev",outcome="rejected"} 0`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("missing %q from metrics response: %s", expected, body)
+		}
+	}
+}
+
 func TestHTTPHandlerAllowsConfiguredExactIP(t *testing.T) {
-	handler, err := NewHTTPHandler(NewRegistry(), []string{"192.0.2.10"})
+	handler, err := NewHTTPHandler(NewRegistry("test.example", "test"), []string{"192.0.2.10"})
 	if err != nil {
 		t.Fatalf("create metrics handler: %v", err)
 	}
@@ -45,7 +66,7 @@ func TestHTTPHandlerAllowsConfiguredExactIP(t *testing.T) {
 }
 
 func TestHTTPHandlerAlwaysAllowsLoopback(t *testing.T) {
-	handler, err := NewHTTPHandler(NewRegistry(), nil)
+	handler, err := NewHTTPHandler(NewRegistry("test.example", "test"), nil)
 	if err != nil {
 		t.Fatalf("create metrics handler: %v", err)
 	}
@@ -61,7 +82,7 @@ func TestHTTPHandlerAlwaysAllowsLoopback(t *testing.T) {
 }
 
 func TestHTTPHandlerHidesEndpointsFromDeniedClients(t *testing.T) {
-	handler, err := NewHTTPHandler(NewRegistry(), []string{"192.0.2.0/24"})
+	handler, err := NewHTTPHandler(NewRegistry("test.example", "test"), []string{"192.0.2.0/24"})
 	if err != nil {
 		t.Fatalf("create metrics handler: %v", err)
 	}
@@ -81,7 +102,7 @@ func TestHTTPHandlerHidesEndpointsFromDeniedClients(t *testing.T) {
 }
 
 func TestHTTPHandlerRejectsInvalidAllowedRange(t *testing.T) {
-	if _, err := NewHTTPHandler(NewRegistry(), []string{"192.0.2.0/99"}); err == nil {
+	if _, err := NewHTTPHandler(NewRegistry("test.example", "test"), []string{"192.0.2.0/99"}); err == nil {
 		t.Fatal("expected invalid CIDR to be rejected")
 	}
 }

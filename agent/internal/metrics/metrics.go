@@ -64,6 +64,7 @@ var (
 		},
 	}
 	evaluationDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+	metricEventOutcomes       = []string{"accepted", "busy", "invalid", "invalid_json", "rejected", "rejected_schema"}
 )
 
 type counterKey struct {
@@ -89,6 +90,8 @@ type applicationHistogram struct {
 
 type Registry struct {
 	mu                    sync.RWMutex
+	instance              string
+	version               string
 	decisions             map[counterKey]uint64
 	operations            map[counterKey]uint64
 	gate                  map[counterKey]uint64
@@ -98,8 +101,10 @@ type Registry struct {
 	applicationSeries     int
 }
 
-func NewRegistry() *Registry {
-	return &Registry{
+func NewRegistry(instance, version string) *Registry {
+	registry := &Registry{
+		instance:              instance,
+		version:               version,
 		decisions:             make(map[counterKey]uint64),
 		operations:            make(map[counterKey]uint64),
 		gate:                  make(map[counterKey]uint64),
@@ -107,6 +112,11 @@ func NewRegistry() *Registry {
 		applicationCounters:   make(map[string]*applicationCounter),
 		applicationHistograms: make(map[string]*applicationHistogram),
 	}
+	for _, outcome := range metricEventOutcomes {
+		registry.metricEvents[counterKey{Name: "metric_events", Outcome: outcome}] = 0
+	}
+
+	return registry
 }
 
 func (r *Registry) Gate(outcome string) {
@@ -214,7 +224,15 @@ func (r *Registry) render() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	lines := r.renderApplicationMetrics(nil)
+	lines := []string{
+		"# HELP laravel_waf_info Build and host information for the Laravel WAF daemon.",
+		"# TYPE laravel_waf_info gauge",
+		fmt.Sprintf(
+			`laravel_waf_info{instance="%s",application="lwafd",version="%s"} 1`,
+			escape(r.instance), escape(r.version),
+		),
+	}
+	lines = r.renderApplicationMetrics(lines)
 	lines = append(lines,
 		"# HELP laravel_waf_agent_decisions_total Decisions accepted or rejected by the Laravel WAF agent.",
 		"# TYPE laravel_waf_agent_decisions_total counter",
@@ -223,8 +241,8 @@ func (r *Registry) render() string {
 	decisionKeys := sortedCounterKeys(r.decisions)
 	for _, key := range decisionKeys {
 		lines = append(lines, fmt.Sprintf(
-			`laravel_waf_agent_decisions_total{action="%s",outcome="%s"} %d`,
-			escape(key.Action), escape(key.Outcome), r.decisions[key],
+			`laravel_waf_agent_decisions_total{instance="%s",action="%s",outcome="%s"} %d`,
+			escape(r.instance), escape(key.Action), escape(key.Outcome), r.decisions[key],
 		))
 	}
 
@@ -236,8 +254,8 @@ func (r *Registry) render() string {
 	operationKeys := sortedCounterKeys(r.operations)
 	for _, key := range operationKeys {
 		lines = append(lines, fmt.Sprintf(
-			`laravel_waf_agent_firewall_operations_total{family="%s",operation="%s",outcome="%s"} %d`,
-			escape(key.Family), escape(key.Action), escape(key.Outcome), r.operations[key],
+			`laravel_waf_agent_firewall_operations_total{instance="%s",family="%s",operation="%s",outcome="%s"} %d`,
+			escape(r.instance), escape(key.Family), escape(key.Action), escape(key.Outcome), r.operations[key],
 		))
 	}
 
@@ -249,8 +267,8 @@ func (r *Registry) render() string {
 	gateKeys := sortedCounterKeys(r.gate)
 	for _, key := range gateKeys {
 		lines = append(lines, fmt.Sprintf(
-			`laravel_waf_agent_gate_requests_total{outcome="%s"} %d`,
-			escape(key.Outcome), r.gate[key],
+			`laravel_waf_agent_gate_requests_total{instance="%s",outcome="%s"} %d`,
+			escape(r.instance), escape(key.Outcome), r.gate[key],
 		))
 	}
 
@@ -261,8 +279,8 @@ func (r *Registry) render() string {
 	metricEventKeys := sortedCounterKeys(r.metricEvents)
 	for _, key := range metricEventKeys {
 		lines = append(lines, fmt.Sprintf(
-			`laravel_waf_agent_metric_events_total{outcome="%s"} %d`,
-			escape(key.Outcome), r.metricEvents[key],
+			`laravel_waf_agent_metric_events_total{instance="%s",outcome="%s"} %d`,
+			escape(r.instance), escape(key.Outcome), r.metricEvents[key],
 		))
 	}
 
@@ -291,7 +309,7 @@ func (r *Registry) renderApplicationMetrics(lines []string) []string {
 			sort.Strings(keys)
 			for _, key := range keys {
 				series := r.applicationCounters[key]
-				lines = append(lines, sample(metricName, labelSet(schema.LabelNames, series.Labels, "", ""), strconv.FormatUint(series.Value, 10)))
+				lines = append(lines, sample(metricName, labelSet(r.instance, schema.LabelNames, series.Labels, "", ""), strconv.FormatUint(series.Value, 10)))
 			}
 
 			continue
@@ -309,14 +327,14 @@ func (r *Registry) renderApplicationMetrics(lines []string) []string {
 			for index, boundary := range evaluationDurationBuckets {
 				lines = append(lines, sample(
 					metricName+"_bucket",
-					labelSet(schema.LabelNames, series.Labels, "le", strconv.FormatFloat(boundary, 'g', -1, 64)),
+					labelSet(r.instance, schema.LabelNames, series.Labels, "le", strconv.FormatFloat(boundary, 'g', -1, 64)),
 					strconv.FormatUint(series.Buckets[index], 10),
 				))
 			}
 			lines = append(lines,
-				sample(metricName+"_bucket", labelSet(schema.LabelNames, series.Labels, "le", "+Inf"), strconv.FormatUint(series.Count, 10)),
-				sample(metricName+"_sum", labelSet(schema.LabelNames, series.Labels, "", ""), strconv.FormatFloat(series.Sum, 'g', -1, 64)),
-				sample(metricName+"_count", labelSet(schema.LabelNames, series.Labels, "", ""), strconv.FormatUint(series.Count, 10)),
+				sample(metricName+"_bucket", labelSet(r.instance, schema.LabelNames, series.Labels, "le", "+Inf"), strconv.FormatUint(series.Count, 10)),
+				sample(metricName+"_sum", labelSet(r.instance, schema.LabelNames, series.Labels, "", ""), strconv.FormatFloat(series.Sum, 'g', -1, 64)),
+				sample(metricName+"_count", labelSet(r.instance, schema.LabelNames, series.Labels, "", ""), strconv.FormatUint(series.Count, 10)),
 			)
 		}
 	}
@@ -354,8 +372,9 @@ func sortedCounterKeys(values map[counterKey]uint64) []counterKey {
 	return keys
 }
 
-func labelSet(names []string, labels map[string]string, extraName, extraValue string) string {
-	values := make([]string, 0, len(names)+1)
+func labelSet(instance string, names []string, labels map[string]string, extraName, extraValue string) string {
+	values := make([]string, 0, len(names)+2)
+	values = append(values, `instance="`+escape(instance)+`"`)
 	for _, name := range names {
 		values = append(values, name+`="`+escape(labels[name])+`"`)
 	}

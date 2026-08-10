@@ -154,6 +154,38 @@ func TestParseTTLRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestResolveMetricsInstanceUsesConfiguredHostname(t *testing.T) {
+	actual, err := resolveMetricsInstance(" dev.bserv.dev. ")
+	if err != nil {
+		t.Fatalf("resolve metrics instance: %v", err)
+	}
+	if actual != "dev.bserv.dev" {
+		t.Fatalf("expected normalized hostname, got %q", actual)
+	}
+}
+
+func TestResolveMetricsInstanceUsesOperatingSystemHostnameByDefault(t *testing.T) {
+	expected, err := os.Hostname()
+	if err != nil {
+		t.Fatalf("read operating-system hostname: %v", err)
+	}
+	expected = strings.TrimSuffix(strings.TrimSpace(expected), ".")
+
+	actual, err := resolveMetricsInstance("")
+	if err != nil {
+		t.Fatalf("resolve default metrics instance: %v", err)
+	}
+	if actual != expected {
+		t.Fatalf("expected operating-system hostname %q, got %q", expected, actual)
+	}
+}
+
+func TestResolveMetricsInstanceRejectsUnsafeValue(t *testing.T) {
+	if _, err := resolveMetricsInstance("dev server\ninvalid"); err == nil {
+		t.Fatal("expected an unsafe metrics instance to be rejected")
+	}
+}
+
 func TestReadSecretOverrideDefaultsToTheSharedSecret(t *testing.T) {
 	shared := []byte("one-shared-secret-with-at-least-32-bytes")
 

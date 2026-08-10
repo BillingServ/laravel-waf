@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,7 +33,11 @@ const (
 	defaultBlockStateFile    = "/var/lib/laravel-waf/blocks.json"
 )
 
-var programName = "lwafd"
+var (
+	programName         = "lwafd"
+	programVersion      = "dev"
+	safeMetricsInstance = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,252}$`)
+)
 
 func main() {
 	handled, err := runControlCommand(os.Args[1:], os.Stdout, os.Stderr)
@@ -67,6 +72,7 @@ func runDaemon() {
 		dryRun           = flag.Bool("dry-run", false, "validate requests without modifying ipset or iptables")
 		metricsAddr      = flag.String("metrics-address", "127.0.0.1:9919", "metrics listener; empty disables metrics")
 		metricsAllowed   = flag.String("metrics-allowed-ips", "", "comma-separated IPs or CIDRs allowed to access metrics and exempt from the WAF kernel DROP rule; loopback is always allowed")
+		metricsInstance  = flag.String("metrics-instance", "", "Prometheus instance label; defaults to the operating-system hostname")
 		metricsSocket    = flag.String("metrics-ingest-socket", "/run/laravel-waf/metrics.sock", "Unix socket receiving signed Laravel metric events; empty disables ingestion")
 		metricsGroup     = flag.String("metrics-ingest-socket-group", "", "optional metrics-ingest socket group; defaults to socket-group")
 		gateSocket       = flag.String("gate-socket", "", "optional Unix HTTP socket used by Nginx auth_request")
@@ -103,6 +109,10 @@ func runDaemon() {
 	}
 	if *reconcileEvery < 0 {
 		logger.Fatal("firewall reconcile interval cannot be negative")
+	}
+	instance, err := resolveMetricsInstance(*metricsInstance)
+	if err != nil {
+		logger.Fatal(err)
 	}
 
 	blockStore := openBlockStore(*stateFile, logger)
@@ -162,7 +172,7 @@ func runDaemon() {
 		logger.Fatal(err)
 	}
 
-	registry := metrics.NewRegistry()
+	registry := metrics.NewRegistry(instance, programVersion)
 	decisionServer := &server.Server{
 		Socket:      *socket,
 		SocketGroup: *socketGroup,
@@ -528,6 +538,23 @@ func readSecretOverride(path string, fallback []byte) ([]byte, error) {
 	}
 
 	return readSecret(path)
+}
+
+func resolveMetricsInstance(configured string) (string, error) {
+	instance := strings.TrimSpace(configured)
+	if instance == "" {
+		var err error
+		instance, err = os.Hostname()
+		if err != nil {
+			return "", fmt.Errorf("resolve metrics hostname: %w", err)
+		}
+	}
+	instance = strings.TrimSuffix(strings.TrimSpace(instance), ".")
+	if !safeMetricsInstance.MatchString(instance) {
+		return "", fmt.Errorf("metrics instance must be a hostname-like value of at most 253 characters")
+	}
+
+	return instance, nil
 }
 
 func commaSeparated(value string) []string {

@@ -10,18 +10,19 @@ The package reads the existing bsv211 variables by default:
 
 ```dotenv
 LARAVEL_WAF_PRESET=balanced
+LARAVEL_WAF_SECRET=replace-with-one-random-64-character-hex-secret
 
 ALTCHA_CHALLENGE_URL=https://example.test/altcha/challenge
-ALTCHA_HMAC_KEY=replace-with-the-same-secret-used-by-the-challenge-endpoint
 ```
 
 Install the package as normal. The official ALTCHA PHP library is installed
-as a package dependency and is used to verify the submitted payload. The
+as a package dependency and is used to verify the submitted payload. Configure
+the challenge-generating endpoint with the same `LARAVEL_WAF_SECRET` value. The
 legacy custom endpoint should return a fresh, short-lived challenge and must
 not be cached.
 
-WAF-specific variables can override the application variables when the
-application has more than one ALTCHA integration:
+WAF-specific variables can override the shared secret and application variables
+when the application has more than one ALTCHA integration:
 
 ```dotenv
 LARAVEL_WAF_ALTCHA_CHALLENGE_URL=https://example.test/altcha/challenge

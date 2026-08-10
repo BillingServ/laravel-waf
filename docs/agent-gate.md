@@ -26,19 +26,17 @@ an HTTP challenge page.
 
 ## Secrets and Laravel configuration
 
-Generate separate random values for the browser cookie and gate marker. Store
-the same values in root-readable files for the agent and in the application's
-secret environment:
+Generate one random secret and store it in a root-readable file for LWAFD and
+in the application's secret environment:
 
 ```dotenv
 LARAVEL_WAF_DDOS_MODE=challenge
 LARAVEL_WAF_CHALLENGE_ENABLED=true
+LARAVEL_WAF_SECRET=replace-with-one-random-64-character-hex-secret
 
 LARAVEL_WAF_AGENT_GATE_ENABLED=true
-LARAVEL_WAF_AGENT_GATE_TOKEN=replace-with-at-least-32-random-bytes
 LARAVEL_WAF_AGENT_GATE_RETRY_AFTER=60
 
-LARAVEL_WAF_CHALLENGE_COOKIE_SECRET=replace-with-a-different-32-byte-secret
 LARAVEL_WAF_CHALLENGE_COOKIE_TTL=3600
 
 # The Go gate replaces Laravel's site-wide adaptive counter. Keep route and
@@ -46,10 +44,11 @@ LARAVEL_WAF_CHALLENGE_COOKIE_TTL=3600
 LARAVEL_WAF_ADAPTIVE_ENABLED=false
 ```
 
-The file supplied with `--challenge-secret-file` must contain the exact
-`LARAVEL_WAF_CHALLENGE_COOKIE_SECRET` value. The file supplied with
-`--gate-token-file` must contain the exact `LARAVEL_WAF_AGENT_GATE_TOKEN` value.
-Do not reuse the ALTCHA HMAC key for either purpose.
+The file supplied with `--secret-file` must contain the exact
+`LARAVEL_WAF_SECRET` value. LWAFD uses it for signed firewall decisions, gate
+markers, and browser-pass validation. Laravel also uses it for ALTCHA
+verification, so the challenge-generating endpoint must be configured with the
+same value.
 
 After changing the application environment, clear cached configuration:
 
@@ -74,9 +73,7 @@ sudo ./bin/lwafd \
   --gate-socket-group www-data \
   --gate-threshold 600 \
   --gate-window 60s \
-  --challenge-cookie laravel_waf_challenge \
-  --challenge-secret-file /etc/laravel-waf/challenge.secret \
-  --gate-token-file /etc/laravel-waf/gate-token.secret
+  --challenge-cookie laravel_waf_challenge
 ```
 
 Gate mode is disabled when `--gate-socket` is omitted. Existing agent installs

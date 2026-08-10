@@ -52,7 +52,7 @@ func runDaemon() {
 	var (
 		socket           = flag.String("socket", "/run/laravel-waf/agent.sock", "absolute Unix socket path")
 		socketGroup      = flag.String("socket-group", "", "optional group name or numeric GID for the Unix socket")
-		secretFile       = flag.String("secret-file", "", "optional file containing the shared HMAC secret")
+		secretFile       = flag.String("secret-file", "", "optional file containing the one shared WAF secret")
 		stateFile        = flag.String("state-file", defaultBlockStateFile, "file storing active block reasons and expiries")
 		ipsetPath        = flag.String("ipset", "ipset", "ipset executable")
 		iptablesPath     = flag.String("iptables", "iptables", "iptables executable")
@@ -65,7 +65,8 @@ func runDaemon() {
 		manageIPTables   = flag.Bool("manage-iptables", true, "attach the expiring ipsets to iptables INPUT rules")
 		reconcileEvery   = flag.Duration("firewall-reconcile-interval", 30*time.Second, "interval used to restore firewall rules after a reload; zero disables periodic checks")
 		dryRun           = flag.Bool("dry-run", false, "validate requests without modifying ipset or iptables")
-		metricsAddr      = flag.String("metrics-address", "127.0.0.1:9919", "local metrics listener; empty disables metrics")
+		metricsAddr      = flag.String("metrics-address", "127.0.0.1:9919", "metrics listener; empty disables metrics")
+		metricsAllowed   = flag.String("metrics-allowed-ips", "", "comma-separated IPs or CIDRs allowed to access metrics; loopback is always allowed")
 		gateSocket       = flag.String("gate-socket", "", "optional Unix HTTP socket used by Nginx auth_request")
 		gateGroup        = flag.String("gate-socket-group", "", "optional gate socket group; defaults to socket-group")
 		gateLimit        = flag.Uint64("gate-threshold", 600, "site-wide requests allowed in each gate window")
@@ -73,8 +74,8 @@ func runDaemon() {
 		gateMethods      = flag.String("gate-methods", "GET,HEAD", "comma-separated original methods eligible for a challenge")
 		gateBypass       = flag.String("gate-bypass-prefixes", "/_waf/challenge,/_waf/metrics,/_waf/blocked,/prometheus", "comma-separated URI prefixes excluded from the gate counter")
 		cookieName       = flag.String("challenge-cookie", "laravel_waf_challenge", "Laravel WAF pass cookie name")
-		cookieSecretFile = flag.String("challenge-secret-file", "", "file containing LARAVEL_WAF_CHALLENGE_COOKIE_SECRET for gate pass validation")
-		gateTokenFile    = flag.String("gate-token-file", "", "file containing LARAVEL_WAF_AGENT_GATE_TOKEN for authenticated challenge markers")
+		cookieSecretFile = flag.String("challenge-secret-file", "", "optional gate cookie-secret override; defaults to secret-file")
+		gateTokenFile    = flag.String("gate-token-file", "", "optional gate marker-token override; defaults to secret-file")
 	)
 	flag.Usage = func() {
 		output := flag.CommandLine.Output()
@@ -143,17 +144,23 @@ func runDaemon() {
 	registry := metrics.NewRegistry()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	errors := make(chan error, 2)
+	errors := make(chan error, 3)
 
 	if *manageIPTables && !*dryRun && *reconcileEvery > 0 {
 		go reconcileFirewallRules(ctx, backend, *reconcileEvery, logger)
 	}
 
 	if *metricsAddr != "" {
+		metricsHandler, err := metrics.NewHTTPHandler(registry, commaSeparated(*metricsAllowed))
+		if err != nil {
+			logger.Fatal(err)
+		}
 		metricsServer := &http.Server{
 			Addr:              *metricsAddr,
-			Handler:           metricsMux(registry),
+			Handler:           metricsHandler,
 			ReadHeaderTimeout: 2 * time.Second,
+			IdleTimeout:       5 * time.Second,
+			MaxHeaderBytes:    16 * 1024,
 		}
 
 		go func() {
@@ -164,17 +171,17 @@ func runDaemon() {
 		go func() {
 			logger.Printf("metrics listening on %s", *metricsAddr)
 			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logger.Printf("metrics server stopped: %v", err)
+				errors <- fmt.Errorf("serve metrics: %w", err)
 			}
 		}()
 	}
 
 	if strings.TrimSpace(*gateSocket) != "" {
-		challengeSecret, err := readSecret(*cookieSecretFile)
+		challengeSecret, err := readSecretOverride(*cookieSecretFile, secret)
 		if err != nil {
 			logger.Fatal(err)
 		}
-		gateToken, err := readSecret(*gateTokenFile)
+		gateToken, err := readSecretOverride(*gateTokenFile, secret)
 		if err != nil {
 			logger.Fatal(err)
 		}
@@ -432,17 +439,6 @@ func reconcileFirewallRules(ctx context.Context, backend *firewall.ManagedBacken
 	}
 }
 
-func metricsMux(registry *metrics.Registry) *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", registry.Handler())
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
-	})
-
-	return mux
-}
-
 func openBlockStore(path string, logger *log.Logger) server.BlockStore {
 	store, err := blocklist.NewFileStore(path)
 	if err == nil {
@@ -470,6 +466,14 @@ func readSecret(path string) ([]byte, error) {
 	}
 
 	return []byte(strings.TrimSpace(string(secret))), nil
+}
+
+func readSecretOverride(path string, fallback []byte) ([]byte, error) {
+	if strings.TrimSpace(path) == "" {
+		return fallback, nil
+	}
+
+	return readSecret(path)
 }
 
 func commaSeparated(value string) []string {

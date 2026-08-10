@@ -13,7 +13,7 @@ final class MetricsEndpointTest extends TestCase
         parent::defineEnvironment($app);
         $app['config']->set('laravel-waf.metrics.enabled', true);
         $app['config']->set('laravel-waf.metrics.route', 'prometheus');
-        $app['config']->set('laravel-waf.metrics.allowed_ips', ['100.64.0.10']);
+        $app['config']->set('laravel-waf.metrics.allowed_ips', ['192.0.2.10']);
         $app['config']->set('laravel-waf.metrics.agent.enabled', true);
     }
 
@@ -25,7 +25,7 @@ final class MetricsEndpointTest extends TestCase
             'body' => "# TYPE laravel_waf_agent_decisions_total counter\nlaravel_waf_agent_decisions_total 3\n",
         ]);
 
-        $this->withServerVariables(['REMOTE_ADDR' => '100.64.0.10'])
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.10'])
             ->get('/prometheus')
             ->assertOk()
             ->assertHeader('Cache-Control', 'no-store, private')
@@ -33,7 +33,7 @@ final class MetricsEndpointTest extends TestCase
             ->assertSee('laravel_waf_agent_metrics_up 1', false)
             ->assertSee('laravel_waf_agent_decisions_total 3', false);
 
-        $this->withServerVariables(['REMOTE_ADDR' => '100.64.0.10'])
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.10'])
             ->get('/_waf/metrics')
             ->assertNotFound();
     }
@@ -51,11 +51,11 @@ final class MetricsEndpointTest extends TestCase
 
     public function test_cidr_allowlist_is_supported(): void
     {
-        config()->set('laravel-waf.metrics.allowed_ips', ['100.64.0.0/10']);
+        config()->set('laravel-waf.metrics.allowed_ips', ['192.0.2.0/24']);
         config()->set('laravel-waf.metrics.agent.enabled', false);
         $this->bindRenderer("local_metric 1\n");
 
-        $this->withServerVariables(['REMOTE_ADDR' => '100.100.20.30'])
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.30'])
             ->get('/prometheus')
             ->assertOk()
             ->assertSee('local_metric 1', false)
@@ -78,7 +78,7 @@ final class MetricsEndpointTest extends TestCase
         $this->bindRenderer("local_metric 1\n");
         $this->bindAgent(['up' => false, 'body' => '']);
 
-        $this->withServerVariables(['REMOTE_ADDR' => '100.64.0.10'])
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.10'])
             ->get('/prometheus')
             ->assertOk()
             ->assertSee('local_metric 1', false)
@@ -99,7 +99,7 @@ final class MetricsEndpointTest extends TestCase
             }
         });
 
-        $this->withServerVariables(['REMOTE_ADDR' => '100.64.0.10'])
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.10'])
             ->get('/prometheus')
             ->assertStatus(503)
             ->assertSee('Prometheus support is not installed.');

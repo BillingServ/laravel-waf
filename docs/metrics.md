@@ -1,15 +1,18 @@
 # Prometheus metrics
 
 The recommended deployment exposes one protected Laravel endpoint containing
-both the PHP WAF registry and the Go agent metrics:
+both the PHP WAF registry and the Go agent metrics. LWAFD can additionally
+expose its own metrics for browser access over Tailscale:
 
 ```text
 Prometheus over Tailscale → /prometheus → Laravel registry
                                      └→ agent 127.0.0.1:9919/metrics
+
+Browser over Tailscale ───────────────→ agent :9919/metrics
 ```
 
-The agent listener remains an internal loopback source. It does not need to be
-reachable from Prometheus or exposed on the public network.
+Use `/prometheus` when Prometheus needs all metrics in one response. The direct
+`:9919/metrics` endpoint contains LWAFD metrics only.
 
 ## Configuration
 
@@ -23,7 +26,7 @@ composer require promphp/prometheus_client_php
 ```dotenv
 LARAVEL_WAF_PRESET=balanced
 LARAVEL_WAF_METRICS_ENABLED=true
-LARAVEL_WAF_METRICS_ALLOWED_IPS=100.64.0.10
+LARAVEL_WAF_METRICS_ALLOWED_IPS=replace-with-prometheus-source-ip-or-cidr
 ```
 
 Multiple IPv4, IPv6, or CIDR entries are comma separated. A client outside the
@@ -61,6 +64,34 @@ new `metrics.allowed_ips` and `metrics.agent` keys from the package config
 before these environment values can take effect. Preserve any existing custom
 middleware or registry settings when updating the published file.
 
+## Browser-viewable LWAFD metrics
+
+LWAFD defaults to loopback. To make its own endpoint available over the
+server's Tailscale IP, bind it to the host and apply the same exact IP or CIDR
+policy deliberately selected for Laravel:
+
+```text
+--metrics-address METRICS_BIND_ADDRESS:9919
+--metrics-allowed-ips PROMETHEUS_SOURCE_IP_OR_CIDR
+```
+
+Then an allowed peer can open:
+
+```text
+http://SERVER_TAILSCALE_IP:9919/metrics
+```
+
+Loopback is always allowed, preserving Laravel's local merge. Invalid
+allowlist entries stop LWAFD at startup, and denied remote clients receive an
+empty `404`. LWAFD uses the direct TCP peer address and does not trust
+`X-Forwarded-For` or similar headers.
+
+The Laravel and LWAFD allowlists are separate process settings. Keep
+`LARAVEL_WAF_METRICS_ALLOWED_IPS` and `--metrics-allowed-ips` aligned. Binding
+to `0.0.0.0` makes the port reachable on host interfaces, but the LWAFD
+allowlist still rejects sources outside the configured ranges. Host firewall
+rules and Tailscale ACLs remain useful additional layers.
+
 ## Tailscale and Nginx
 
 Use Tailscale ACLs and, where practical, bind the private virtual host or
@@ -69,8 +100,8 @@ second enforcement layer; Nginx can also deny the public location. Ensure
 Laravel's trusted-proxy configuration makes `Request::ip()` the real Tailscale
 client address before relying on the application allowlist.
 
-Avoid allowlisting the whole `100.64.0.0/10` range unless every reachable
-tailnet peer should be able to scrape metrics. An exact `/32` or `/128` for the
+Avoid allowlisting the tailnet's complete address range unless every reachable
+peer should be able to scrape metrics. An exact `/32` or `/128` for the
 Prometheus server is preferable.
 
 A minimal Prometheus job is:
@@ -87,6 +118,22 @@ scrape_configs:
 
 Apply the site's TLS requirements in Prometheus and use the tailnet DNS name or
 Tailscale IP that routes only over the tailnet.
+
+To scrape LWAFD directly instead of collecting it through Laravel:
+
+```yaml
+scrape_configs:
+  - job_name: lwafd
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - "SERVER_TAILSCALE_IP:9919"
+```
+
+Do not scrape the direct LWAFD target and Laravel's merged `/prometheus` target
+into the same Prometheus job unless duplicate agent series are intentionally
+handled.
 
 ## Exported metrics
 

@@ -63,6 +63,7 @@ final class WafServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/laravel-waf.php', 'laravel-waf');
+        $this->applySharedSecret();
 
         $this->app->singleton(Repository::class, fn ($app): Repository => $app->make('cache')->driver());
 
@@ -237,6 +238,27 @@ final class WafServiceProvider extends ServiceProvider
 
             return new DefaultChallengeResponder($title, $message, $status);
         });
+    }
+
+    private function applySharedSecret(): void
+    {
+        $config = $this->app->make('config');
+        $secret = $config->get('laravel-waf.secret');
+        if (!is_string($secret) || $secret === '') {
+            return;
+        }
+
+        foreach ([
+            'laravel-waf.challenge.cookie_secret',
+            'laravel-waf.challenge.altcha.hmac_key',
+            'laravel-waf.agent.secret',
+            'laravel-waf.agent.gate.token',
+        ] as $key) {
+            $value = $config->get($key);
+            if ($value === null || $value === '') {
+                $config->set($key, $secret);
+            }
+        }
     }
 
     public function boot(): void

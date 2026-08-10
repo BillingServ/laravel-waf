@@ -73,7 +73,7 @@ final class ConfigurationPresetTest extends TestCase
             'LARAVEL_WAF_AGENT_AUTO_BLOCK' => 'false',
             'LARAVEL_WAF_AGENT_AUTO_BLOCK_ON_FINDING' => 'false',
             'LARAVEL_WAF_METRICS_ROUTE' => 'internal/prometheus',
-            'LARAVEL_WAF_METRICS_ALLOWED_IPS' => '100.64.0.10, fd7a:115c:a1e0::/48',
+            'LARAVEL_WAF_METRICS_ALLOWED_IPS' => '192.0.2.10, 2001:db8::/32',
             'LARAVEL_WAF_METRICS_INCLUDE_AGENT' => 'false',
         ]);
 
@@ -83,8 +83,45 @@ final class ConfigurationPresetTest extends TestCase
         self::assertFalse($config['agent']['auto_block_on_limit']);
         self::assertFalse($config['agent']['auto_block_on_finding']);
         self::assertSame('internal/prometheus', $config['metrics']['route']);
-        self::assertSame(['100.64.0.10', 'fd7a:115c:a1e0::/48'], $config['metrics']['allowed_ips']);
+        self::assertSame(['192.0.2.10', '2001:db8::/32'], $config['metrics']['allowed_ips']);
         self::assertFalse($config['metrics']['agent']['enabled']);
+    }
+
+    public function test_one_secret_supplies_every_waf_secret_consumer(): void
+    {
+        $config = $this->configuration([
+            'LARAVEL_WAF_SECRET' => 'shared-waf-secret-with-at-least-32-bytes',
+        ]);
+
+        self::assertSame('shared-waf-secret-with-at-least-32-bytes', $config['secret']);
+        self::assertSame('shared-waf-secret-with-at-least-32-bytes', $config['challenge']['cookie_secret']);
+        self::assertSame('shared-waf-secret-with-at-least-32-bytes', $config['challenge']['altcha']['hmac_key']);
+        self::assertSame('shared-waf-secret-with-at-least-32-bytes', $config['agent']['secret']);
+        self::assertSame('shared-waf-secret-with-at-least-32-bytes', $config['agent']['gate']['token']);
+    }
+
+    public function test_specific_secrets_remain_backward_compatible_overrides(): void
+    {
+        $config = $this->configuration([
+            'LARAVEL_WAF_SECRET' => 'shared-waf-secret-with-at-least-32-bytes',
+            'LARAVEL_WAF_CHALLENGE_COOKIE_SECRET' => 'legacy-cookie-secret-with-at-least-32-bytes',
+            'LARAVEL_WAF_ALTCHA_HMAC_KEY' => 'legacy-altcha-secret-with-at-least-32-bytes',
+            'LARAVEL_WAF_AGENT_SECRET' => 'legacy-agent-secret-with-at-least-32-bytes',
+            'LARAVEL_WAF_AGENT_GATE_TOKEN' => 'legacy-gate-secret-with-at-least-32-bytes',
+        ]);
+
+        self::assertSame('legacy-cookie-secret-with-at-least-32-bytes', $config['challenge']['cookie_secret']);
+        self::assertSame('legacy-altcha-secret-with-at-least-32-bytes', $config['challenge']['altcha']['hmac_key']);
+        self::assertSame('legacy-agent-secret-with-at-least-32-bytes', $config['agent']['secret']);
+        self::assertSame('legacy-gate-secret-with-at-least-32-bytes', $config['agent']['gate']['token']);
+    }
+
+    public function test_invalid_shared_secret_is_rejected(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('LARAVEL_WAF_SECRET');
+
+        $this->configuration(['LARAVEL_WAF_SECRET' => 'too-short']);
     }
 
     public function test_unknown_preset_is_rejected(): void
@@ -162,6 +199,7 @@ final class ConfigurationPresetTest extends TestCase
     {
         return [
             'LARAVEL_WAF_PRESET',
+            'LARAVEL_WAF_SECRET',
             'LARAVEL_WAF_DDOS_MODE',
             'LARAVEL_WAF_ADAPTIVE_ENABLED',
             'LARAVEL_WAF_BEHAVIOR_ACTION',
@@ -172,12 +210,17 @@ final class ConfigurationPresetTest extends TestCase
             'LARAVEL_WAF_CHALLENGE_MESSAGE',
             'LARAVEL_WAF_CHALLENGE_COOKIE_TTL',
             'LARAVEL_WAF_CHALLENGE_COOKIE_SECURE',
+            'LARAVEL_WAF_CHALLENGE_COOKIE_SECRET',
+            'LARAVEL_WAF_ALTCHA_HMAC_KEY',
+            'ALTCHA_HMAC_KEY',
             'LARAVEL_WAF_ALTCHA_AUTO',
             'LARAVEL_WAF_ALTCHA_AUTO_SUBMIT',
             'LARAVEL_WAF_ALTCHA_DISPLAY',
             'LARAVEL_WAF_AGENT_AUTO_BLOCK',
             'LARAVEL_WAF_AGENT_AUTO_BLOCK_ON_FINDING',
             'LARAVEL_WAF_AGENT_ENABLED',
+            'LARAVEL_WAF_AGENT_SECRET',
+            'LARAVEL_WAF_AGENT_GATE_TOKEN',
             'LARAVEL_WAF_METRICS_ENABLED',
             'LARAVEL_WAF_METRICS_ROUTE',
             'LARAVEL_WAF_METRICS_ALLOWED_IPS',

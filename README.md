@@ -70,19 +70,22 @@ be replaced with:
 
 ```dotenv
 LARAVEL_WAF_PRESET=balanced
+LARAVEL_WAF_SECRET=replace-with-one-random-64-character-hex-secret
 LARAVEL_WAF_AGENT_ENABLED=true
-LARAVEL_WAF_AGENT_SECRET=replace-with-a-new-random-secret
+LARAVEL_WAF_AGENT_GATE_ENABLED=true
+LARAVEL_WAF_ADAPTIVE_ENABLED=false
 LARAVEL_WAF_METRICS_ENABLED=true
-LARAVEL_WAF_METRICS_ALLOWED_IPS=replace-with-prometheus-tailscale-ip
+LARAVEL_WAF_METRICS_ALLOWED_IPS=replace-with-allowed-source-ip-or-cidr
 ```
 
 `balanced` enables the automatic ALTCHA challenge flow, adaptive traffic
 pressure, reject-mode request and behaviour rules, and automatic login,
 rate-limit, and finding block decisions. The agent itself and the metrics
 route remain explicit because they require local infrastructure and access
-controls. Existing `ALTCHA_CHALLENGE_URL` and `ALTCHA_HMAC_KEY` values are
-reused; set their `LARAVEL_WAF_ALTCHA_*` equivalents only when the WAF needs a
-separate integration.
+controls. `LARAVEL_WAF_SECRET` is the default for agent decisions, the Nginx
+gate marker, browser-pass cookies, and ALTCHA verification. Existing granular
+secret variables remain supported as overrides for older deployments. The
+ALTCHA challenge-generating endpoint must use the same secret.
 
 The default `standard` preset preserves the package's existing conservative
 defaults. Any granular `LARAVEL_WAF_*` variable continues to override its
@@ -117,10 +120,10 @@ Prometheus support is optional:
 composer require promphp/prometheus_client_php
 ```
 
-When metrics are enabled, Prometheus scrapes one configurable `/prometheus`
-endpoint containing both Laravel and loopback agent metrics. Restrict it to the
-Prometheus server's Tailscale IP or CIDR and keep the agent listener bound to
-loopback. See [`docs/metrics.md`](docs/metrics.md).
+When metrics are enabled, Prometheus can scrape one configurable `/prometheus`
+endpoint containing both Laravel and agent metrics. LWAFD can also expose its
+own browser-viewable `:9919/metrics` endpoint behind an exact IP or CIDR
+allowlist. See [`docs/metrics.md`](docs/metrics.md).
 
 Metric labels are bounded: IP addresses, URLs, query strings, headers, user
 IDs, request bodies, and attack payloads are not used as labels.

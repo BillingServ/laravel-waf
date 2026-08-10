@@ -154,6 +154,33 @@ func TestParseTTLRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestReadSecretOverrideDefaultsToTheSharedSecret(t *testing.T) {
+	shared := []byte("one-shared-secret-with-at-least-32-bytes")
+
+	actual, err := readSecretOverride("", shared)
+	if err != nil {
+		t.Fatalf("read shared secret: %v", err)
+	}
+	if string(actual) != string(shared) {
+		t.Fatalf("expected shared secret, got %q", string(actual))
+	}
+}
+
+func TestReadSecretOverridePreservesLegacyOverrideFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.secret")
+	if err := os.WriteFile(path, []byte("legacy-secret-with-at-least-32-bytes\n"), 0o600); err != nil {
+		t.Fatalf("write legacy secret: %v", err)
+	}
+
+	actual, err := readSecretOverride(path, []byte("shared-secret-with-at-least-32-bytes"))
+	if err != nil {
+		t.Fatalf("read legacy override: %v", err)
+	}
+	if string(actual) != "legacy-secret-with-at-least-32-bytes" {
+		t.Fatalf("unexpected legacy override %q", string(actual))
+	}
+}
+
 type decisionResult struct {
 	decision protocol.Decision
 	err      error

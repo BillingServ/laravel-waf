@@ -8,8 +8,17 @@ if (!in_array($preset, ['standard', 'balanced'], true)) {
 }
 $balanced = $preset === 'balanced';
 
+// One deployment secret supplies every WAF HMAC consumer. Granular variables
+// below remain backward-compatible overrides.
+$secret = env('LARAVEL_WAF_SECRET');
+if ($secret !== null
+    && (!is_string($secret) || preg_match('/^[\x21-\x7e]{32,256}$/D', $secret) !== 1)) {
+    throw new InvalidArgumentException('LARAVEL_WAF_SECRET must contain between 32 and 256 visible ASCII characters.');
+}
+
 return [
     'preset' => $preset,
+    'secret' => $secret,
     'enabled' => env('LARAVEL_WAF_ENABLED', true),
 
     'ddos' => [
@@ -256,7 +265,7 @@ return [
         'blocked_path' => env('LARAVEL_WAF_BLOCKED_PATH', '_waf/blocked'),
         'blocked_route' => 'laravel-waf.blocked',
         'cookie_name' => env('LARAVEL_WAF_CHALLENGE_COOKIE', 'laravel_waf_challenge'),
-        'cookie_secret' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SECRET'),
+        'cookie_secret' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SECRET', $secret),
         'cookie_ttl_seconds' => (int) env('LARAVEL_WAF_CHALLENGE_COOKIE_TTL', $balanced ? 3600 : 600),
         'cookie_secure' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SECURE', $balanced ? true : 'auto'), // true|false|auto
         'cookie_same_site' => env('LARAVEL_WAF_CHALLENGE_COOKIE_SAME_SITE', 'lax'),
@@ -284,7 +293,7 @@ return [
             // Existing bsv211 deployments can keep using ALTCHA_CHALLENGE_URL
             // and ALTCHA_HMAC_KEY. WAF-specific variables take precedence.
             'challenge_url' => env('LARAVEL_WAF_ALTCHA_CHALLENGE_URL', env('ALTCHA_CHALLENGE_URL')),
-            'hmac_key' => env('LARAVEL_WAF_ALTCHA_HMAC_KEY', env('ALTCHA_HMAC_KEY')),
+            'hmac_key' => env('LARAVEL_WAF_ALTCHA_HMAC_KEY', env('ALTCHA_HMAC_KEY', $secret)),
             'verification' => env('LARAVEL_WAF_ALTCHA_VERIFICATION', 'solution'), // solution|server_signature
             'field' => env('LARAVEL_WAF_ALTCHA_FIELD', 'altcha'),
             'max_payload_bytes' => (int) env('LARAVEL_WAF_ALTCHA_MAX_PAYLOAD_BYTES', 65536),
@@ -312,7 +321,7 @@ return [
     'agent' => [
         'enabled' => env('LARAVEL_WAF_AGENT_ENABLED', false),
         'socket' => env('LARAVEL_WAF_AGENT_SOCKET', '/run/laravel-waf/agent.sock'),
-        'secret' => env('LARAVEL_WAF_AGENT_SECRET'),
+        'secret' => env('LARAVEL_WAF_AGENT_SECRET', $secret),
         'timeout_ms' => (int) env('LARAVEL_WAF_AGENT_TIMEOUT_MS', 25),
         'block_ttl_seconds' => (int) env('LARAVEL_WAF_AGENT_BLOCK_TTL_SECONDS', 900),
         'block_cooldown_seconds' => (int) env('LARAVEL_WAF_AGENT_BLOCK_COOLDOWN_SECONDS', 60),
@@ -326,7 +335,7 @@ return [
         'gate' => [
             'enabled' => env('LARAVEL_WAF_AGENT_GATE_ENABLED', false),
             'header' => 'X-Laravel-Waf-Gate',
-            'token' => env('LARAVEL_WAF_AGENT_GATE_TOKEN'),
+            'token' => env('LARAVEL_WAF_AGENT_GATE_TOKEN', $secret),
             'retry_after_seconds' => (int) env('LARAVEL_WAF_AGENT_GATE_RETRY_AFTER', 60),
         ],
     ],

@@ -77,7 +77,26 @@ sudo ./bin/lwafd \
   --secret-file /etc/laravel-waf/agent.secret
 ```
 
-The socket group must match the PHP-FPM process group. The secret file is optional but recommended. It must match `LARAVEL_WAF_AGENT_SECRET` in the Laravel application. The metrics listener binds to loopback by default at `127.0.0.1:9919`; the Laravel `/prometheus` endpoint can collect it so Prometheus needs only one protected scrape target.
+The socket group must match the PHP-FPM process group. The secret file is optional but recommended. It must match `LARAVEL_WAF_SECRET` in the Laravel application. The metrics listener binds to loopback by default at `127.0.0.1:9919`; the Laravel `/prometheus` endpoint can collect it so Prometheus needs only one combined scrape target.
+
+To make LWAFD's own metrics browser-viewable over Tailscale, listen on all IPv4
+interfaces and allow only the required Tailscale IP or CIDR. Loopback is always
+allowed so Laravel can continue collecting the agent source:
+
+```bash
+sudo ./bin/lwafd \
+  --socket /run/laravel-waf/agent.sock \
+  --socket-group www-data \
+  --secret-file /etc/laravel-waf/agent.secret \
+  --metrics-address METRICS_BIND_ADDRESS:9919 \
+  --metrics-allowed-ips PROMETHEUS_SOURCE_IP_OR_CIDR
+```
+
+An allowed Tailscale peer can then open
+`http://SERVER_TAILSCALE_IP:9919/metrics`. Disallowed sources receive an
+empty `404`. The allowlist uses the direct TCP peer address and ignores proxy
+headers. Use Laravel's `/prometheus` route when one response containing both
+Laravel and LWAFD metrics is required.
 
 Use `--dry-run` while validating the integration. Start with `LARAVEL_WAF_AGENT_AUTO_BLOCK=false`; automatic host blocks should only be enabled after the application's IP and proxy configuration have been verified. When the host also runs a firewall service that rebuilds INPUT, order this service after it so the initial rules are attached last.
 
@@ -139,14 +158,12 @@ sudo ./bin/lwafd \
   --gate-socket /run/laravel-waf/gate.sock \
   --gate-socket-group www-data \
   --gate-threshold 600 \
-  --gate-window 60s \
-  --challenge-secret-file /etc/laravel-waf/challenge.secret \
-  --gate-token-file /etc/laravel-waf/gate-token.secret
+  --gate-window 60s
 ```
 
-The challenge secret must exactly match
-`LARAVEL_WAF_CHALLENGE_COOKIE_SECRET`. The gate token must exactly match
-`LARAVEL_WAF_AGENT_GATE_TOKEN`. Both must contain at least 32 bytes.
+The one secret file must exactly match `LARAVEL_WAF_SECRET`. LWAFD uses that
+value for firewall decisions, browser-pass validation, and gate markers. It
+must contain at least 32 bytes.
 
 Only `GET` and `HEAD` are challenged by default. Other methods contribute to
 traffic pressure but continue to Laravel, where the normal WAF limits still

@@ -66,7 +66,7 @@ final class LoopbackAgentMetricsSourceTest extends TestCase
     {
         return [
             'remote host' => ['http://example.com:9919/metrics'],
-            'tailscale host' => ['http://100.64.0.10:9919/metrics'],
+            'remote IP' => ['http://192.0.2.10:9919/metrics'],
             'unsupported TLS' => ['https://127.0.0.1:9919/metrics'],
             'credentials' => ['http://user@127.0.0.1:9919/metrics'],
             'query string' => ['http://127.0.0.1:9919/metrics?target=other'],

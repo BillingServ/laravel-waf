@@ -130,7 +130,7 @@ location @laravel_app {
     auth_request_set $laravel_waf_gate_marker $upstream_http_x_laravel_waf_gate;
     auth_request_set $laravel_waf_gate_retry_after $upstream_http_retry_after;
     error_page 403 = @laravel_waf_challenge;
-    error_page 401 = @laravel_waf_rate_blocked;
+    error_page 401 =403 /__laravel_waf_blocked.html;
 
     include fastcgi_params;
     fastcgi_param SCRIPT_FILENAME $realpath_root/index.php;
@@ -142,18 +142,27 @@ location @laravel_app {
 }
 ```
 
-Keep repeated rate-blocked traffic out of PHP. This minimal example can be
-replaced by a static branded page:
+Keep repeated rate-blocked traffic out of PHP. Render Laravel WAF's
+`BlockedResponse` once during deployment and install the resulting HTML at
+`/etc/nginx/laravel-waf/__laravel_waf_blocked.html`. This preserves the
+configured blocked design, theme, identity, logo, and favicon without booting
+Laravel for every denied request:
 
 ```nginx
-location @laravel_waf_rate_blocked {
+location = /__laravel_waf_blocked.html {
+    internal;
+    root /etc/nginx/laravel-waf;
     default_type text/html;
+    charset utf-8;
     add_header Cache-Control "no-store" always;
     add_header Retry-After $laravel_waf_gate_retry_after always;
     add_header X-Laravel-Waf-Blocked "true" always;
-    return 403 '<h1>Request blocked</h1>';
 }
 ```
+
+The `=403` status override keeps the public response classified as blocked.
+The internal static URI cannot be requested directly. Regenerate the file
+whenever the Laravel WAF package or blocked-page branding changes.
 
 The named location must invoke the same Laravel `public/index.php` entry point
 as the site's normal PHP location while supplying the captured marker. Adapt

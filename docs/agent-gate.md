@@ -5,24 +5,32 @@ continue before PHP is started. The Go process measures site-wide request
 pressure and validates Laravel's signed browser-pass cookie. Laravel still owns
 the challenge page, ALTCHA proof verification, redirect, and cookie issuance.
 
-The firewall and challenge outcomes are intentionally separate. A challenged
-IP must not be added to IPSet because a firewall-dropped client cannot receive
-an HTTP challenge page.
+Aggregate pressure and individual abuse are intentionally separate. Crossing
+the site-wide threshold challenges an unverified visitor but never creates a
+firewall block. An unverified client that independently exceeds the gate's
+per-client threshold is blocked because that decision is attributable to one
+source rather than shared traffic pressure.
 
 ## Request flow
 
 1. Nginx sends an `auth_request` subrequest over the private gate Unix socket.
-2. Go counts the request in a fixed site-wide window.
-3. Below the threshold, or with a valid IP-bound pass cookie, Go returns `204`.
-4. Under pressure, an unverified `GET` or `HEAD` receives `403` plus a private,
+2. Go counts the request in fixed site-wide and bounded per-client/path windows.
+3. A valid IP-bound pass cookie, or an unverified request below both limits,
+   receives `204`.
+4. By default, request 61 from one unverified client in 60 seconds creates one
+   `gate_rate_limit` block through LWAFD's existing firewall and audit path.
+   LWAFD returns `401` so Nginx can serve a blocked response without booting PHP.
+5. Under aggregate pressure, an unverified `GET` or `HEAD` receives `403` plus a private,
    authenticated gate marker.
-5. Nginx internally retries the original request through PHP with that marker.
-6. Laravel WAF validates the marker and returns “Checking your browser” before
+6. Nginx internally retries the original request through PHP with that marker.
+7. Laravel WAF validates the marker and returns “Checking your browser” before
    the requested route or controller executes.
-7. After ALTCHA succeeds, Laravel sets the pass cookie. Go validates that cookie
+8. After ALTCHA succeeds, Laravel sets the pass cookie. Go validates that cookie
    on subsequent requests and Nginx allows the application request.
-8. Independent high-confidence Laravel findings can still send the existing
-   signed `block_ip` decision to the agent.
+9. Independent high-confidence Laravel findings can still send the existing
+   signed `block_ip` decision to the agent. Accepted decisions are mirrored
+   into the gate, so a proxied client is denied before PHP even when the
+   backend INPUT rule sees the proxy as its network peer.
 
 ## Secrets and Laravel configuration
 
@@ -76,8 +84,18 @@ sudo ./bin/lwafd \
   --challenge-cookie laravel_waf_challenge
 ```
 
+The defaults mirror Laravel's normal limits: 60 unverified requests to one path
+or 120 total requests from one client in the same gate window, followed by a
+900-second block. Advanced deployments can change the path threshold with
+`--gate-client-threshold` (the total remains twice that value) and the TTL with
+`--gate-block-ttl`; setting the threshold to `0` disables only gate-generated
+blocks.
+
 Gate mode is disabled when `--gate-socket` is omitted. Existing agent installs
 therefore retain block/unblock-only behavior until explicitly changed.
+When the default ledger is available, active records from
+`/var/lib/laravel-waf/blocks.json` are loaded when the gate starts, so this
+application-edge denial survives an LWAFD restart.
 
 ## Nginx configuration
 
@@ -110,7 +128,9 @@ location / {
 location @laravel_app {
     auth_request /_laravel_waf_gate;
     auth_request_set $laravel_waf_gate_marker $upstream_http_x_laravel_waf_gate;
+    auth_request_set $laravel_waf_gate_retry_after $upstream_http_retry_after;
     error_page 403 = @laravel_waf_challenge;
+    error_page 401 = @laravel_waf_rate_blocked;
 
     include fastcgi_params;
     fastcgi_param SCRIPT_FILENAME $realpath_root/index.php;
@@ -119,6 +139,19 @@ location @laravel_app {
     # Never pass a public client-supplied marker to Laravel.
     fastcgi_param HTTP_X_LARAVEL_WAF_GATE "";
     fastcgi_pass unix:/run/php/php-fpm.sock;
+}
+```
+
+Keep repeated rate-blocked traffic out of PHP. This minimal example can be
+replaced by a static branded page:
+
+```nginx
+location @laravel_waf_rate_blocked {
+    default_type text/html;
+    add_header Cache-Control "no-store" always;
+    add_header Retry-After $laravel_waf_gate_retry_after always;
+    add_header X-Laravel-Waf-Blocked "true" always;
+    return 403 '<h1>Request blocked</h1>';
 }
 ```
 
@@ -143,6 +176,13 @@ with `nginx -t` before reloading it.
 `$remote_addr` must already represent the real client. If a CDN or load balancer
 is present, configure Nginx real-IP handling only for explicitly trusted proxy
 ranges before enabling the gate.
+
+An INPUT firewall rule sees the network peer, not `X-Forwarded-For`. If a
+different machine proxies public traffic to the protected host, the backend
+gate can still deny the forwarded client before PHP, but a backend IPSet entry
+for that client cannot match packets whose source is the proxy. Put equivalent
+network enforcement on the proxy or upstream edge when packets must be dropped
+before they reach the backend.
 
 ## Bypasses and methods
 
@@ -173,6 +213,9 @@ laravel_waf_agent_gate_requests_total{outcome="challenged"}
 laravel_waf_agent_gate_requests_total{outcome="bypassed"}
 laravel_waf_agent_gate_requests_total{outcome="allowed_method"}
 laravel_waf_agent_gate_requests_total{outcome="invalid"}
+laravel_waf_agent_gate_requests_total{outcome="rate_blocked"}
+laravel_waf_agent_gate_requests_total{outcome="blocked"}
+laravel_waf_agent_gate_requests_total{outcome="rate_block_error"}
 ```
 
 Laravel records accepted gate markers as:
@@ -189,5 +232,8 @@ laravel_waf_decisions{action="challenge",scope="agent_gate",route="..."}
 3. Enable the Laravel gate configuration and disable Laravel adaptive pressure.
 4. Test with a temporary low Go threshold from a private browser window.
 5. Restore the production threshold and monitor challenged/pass ratios.
-6. Leave automatic IP blocking disabled until real-IP handling and decision
-   quality have been independently verified.
+6. Confirm request 61 from one unverified test client records exactly one
+   `gate_rate_limit` block, while requests from many independent clients only
+   trigger the aggregate challenge.
+7. Confirm whether the host receives client connections directly or through a
+   separate proxy, and place network-layer enforcement at the actual ingress.

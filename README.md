@@ -25,8 +25,9 @@ upstream provider → iptables/ipset → Nginx → Laravel WAF → application
 - Adds standard response security headers without replacing headers set by the application.
 - Provides an opt-in outbound URL guard for integrations that accept remote URLs.
 - Includes an optional Linux agent for signed, expiring IP block decisions sent over a Unix socket.
-- Supports an opt-in Nginx/Go pre-application gate that detects traffic pressure
-  and delegates browser challenges to Laravel.
+- Supports an opt-in Nginx/Go pre-application gate that detects aggregate
+  traffic pressure, blocks abusive individual clients, and delegates browser
+  challenges to Laravel.
 
 These controls operate at the Laravel application layer. They complement
 parameterized database queries, output encoding, secure file handling, Nginx

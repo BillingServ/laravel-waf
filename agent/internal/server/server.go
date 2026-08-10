@@ -29,6 +29,11 @@ type BlockStore interface {
 	RemoveBlock(net.IP) error
 }
 
+type BlockObserver interface {
+	ObserveBlock(net.IP, time.Time)
+	ObserveUnblock(net.IP)
+}
+
 type Server struct {
 	Socket      string
 	SocketGroup string
@@ -38,6 +43,24 @@ type Server struct {
 	Store       BlockStore
 	Metrics     *metrics.Registry
 	Logger      *log.Logger
+	Observer    BlockObserver
+}
+
+// Block applies a locally generated, validated block through the same
+// firewall, audit, and metrics path used by signed Laravel decisions.
+func (s *Server) Block(ctx context.Context, ip net.IP, ttlSeconds int, reason string) error {
+	decision := protocol.Decision{
+		Version:    protocol.Version,
+		Action:     "block_ip",
+		IP:         ip.String(),
+		TTLSeconds: ttlSeconds,
+		Reason:     reason,
+	}
+	if err := decision.Validate(s.MaxTTL); err != nil {
+		return err
+	}
+
+	return s.apply(ctx, decision)
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -108,27 +131,37 @@ func (s *Server) handle(connection net.Conn) {
 		return
 	}
 
+	operationContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := s.apply(operationContext, decision); err != nil {
+		writeError(connection, "firewall backend error")
+		return
+	}
+
+	writeOK(connection)
+}
+
+func (s *Server) apply(ctx context.Context, decision protocol.Decision) error {
+	if s.Backend == nil || s.Metrics == nil {
+		return fmt.Errorf("backend and metrics registry are required")
+	}
+
 	ip := net.ParseIP(decision.IP)
 	if ip == nil {
-		s.Metrics.Decision(metricAction(decision.Action), "rejected")
-		writeError(connection, "invalid IP")
-		return
+		return fmt.Errorf("invalid IP address")
 	}
 
 	operation := "block"
 	var backendErr error
 	var stateErr error
-	operationContext, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
 	if decision.Action == "block_ip" {
-		backendErr = s.Backend.Block(operationContext, ip, decision.TTLSeconds)
+		backendErr = s.Backend.Block(ctx, ip, decision.TTLSeconds)
 		if backendErr == nil && s.Store != nil {
 			stateErr = s.Store.RecordBlock(ip, decision.TTLSeconds, decision.Reason)
 		}
 	} else {
 		operation = "unblock"
-		backendErr = s.Backend.Unblock(operationContext, ip)
+		backendErr = s.Backend.Unblock(ctx, ip)
 		if backendErr == nil && s.Store != nil {
 			stateErr = s.Store.RemoveBlock(ip)
 		}
@@ -142,8 +175,15 @@ func (s *Server) handle(connection net.Conn) {
 	if backendErr != nil {
 		s.Metrics.Decision(decision.Action, "backend_error")
 		s.Metrics.Operation(operation, "error", family)
-		writeError(connection, "firewall backend error")
-		return
+
+		return backendErr
+	}
+	if s.Observer != nil {
+		if decision.Action == "block_ip" {
+			s.Observer.ObserveBlock(ip, time.Now().Add(time.Duration(decision.TTLSeconds)*time.Second))
+		} else {
+			s.Observer.ObserveUnblock(ip)
+		}
 	}
 
 	outcome := "accepted"
@@ -156,7 +196,8 @@ func (s *Server) handle(connection net.Conn) {
 
 	s.Metrics.Decision(decision.Action, outcome)
 	s.Metrics.Operation(operation, "accepted", family)
-	writeOK(connection)
+
+	return nil
 }
 
 func metricAction(action string) string {

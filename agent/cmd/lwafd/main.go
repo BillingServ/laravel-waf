@@ -70,7 +70,9 @@ func runDaemon() {
 		gateSocket       = flag.String("gate-socket", "", "optional Unix HTTP socket used by Nginx auth_request")
 		gateGroup        = flag.String("gate-socket-group", "", "optional gate socket group; defaults to socket-group")
 		gateLimit        = flag.Uint64("gate-threshold", 600, "site-wide requests allowed in each gate window")
+		gateClientLimit  = flag.Uint64("gate-client-threshold", gate.DefaultClientThreshold, "unverified requests allowed per client path in each gate window; total client allowance is twice this value; zero disables automatic blocking")
 		gateWindow       = flag.Duration("gate-window", time.Minute, "fixed traffic-pressure window")
+		gateBlockTTL     = flag.Int("gate-block-ttl", gate.DefaultBlockTTLSeconds, "seconds a gate rate-limit block remains active")
 		gateMethods      = flag.String("gate-methods", "GET,HEAD", "comma-separated original methods eligible for a challenge")
 		gateBypass       = flag.String("gate-bypass-prefixes", "/_waf/challenge,/_waf/metrics,/_waf/blocked,/prometheus", "comma-separated URI prefixes excluded from the gate counter")
 		cookieName       = flag.String("challenge-cookie", "laravel_waf_challenge", "Laravel WAF pass cookie name")
@@ -142,6 +144,16 @@ func runDaemon() {
 	}
 
 	registry := metrics.NewRegistry()
+	decisionServer := &server.Server{
+		Socket:      *socket,
+		SocketGroup: *socketGroup,
+		Secret:      secret,
+		MaxTTL:      *maxTTL,
+		Backend:     backend,
+		Store:       blockStore,
+		Metrics:     registry,
+		Logger:      logger,
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	errors := make(chan error, 3)
@@ -177,6 +189,9 @@ func runDaemon() {
 	}
 
 	if strings.TrimSpace(*gateSocket) != "" {
+		if *gateClientLimit > 0 && (*gateBlockTTL < 1 || *gateBlockTTL > *maxTTL) {
+			logger.Fatalf("gate block TTL must be between 1 and %d seconds", *maxTTL)
+		}
 		challengeSecret, err := readSecretOverride(*cookieSecretFile, secret)
 		if err != nil {
 			logger.Fatal(err)
@@ -187,15 +202,28 @@ func runDaemon() {
 		}
 		gateHandler, err := gate.NewHandler(gate.Config{
 			Threshold:       *gateLimit,
+			ClientThreshold: *gateClientLimit,
 			Window:          *gateWindow,
+			BlockTTLSeconds: *gateBlockTTL,
 			CookieName:      *cookieName,
 			ChallengeSecret: challengeSecret,
 			MarkerToken:     string(gateToken),
 			BypassPrefixes:  commaSeparated(*gateBypass),
 			Methods:         commaSeparated(*gateMethods),
-		}, registry)
+		}, registry, decisionServer)
 		if err != nil {
 			logger.Fatal(err)
+		}
+		decisionServer.Observer = gateHandler
+		if blockStore != nil {
+			records, err := blockStore.List()
+			if err != nil {
+				logger.Printf("warning: active blocks could not be loaded into the gate: %v", err)
+			} else {
+				for _, record := range records {
+					gateHandler.ObserveBlock(net.ParseIP(record.IP), time.Unix(record.ExpiresAt, 0))
+				}
+			}
 		}
 
 		group := *gateGroup
@@ -214,16 +242,7 @@ func runDaemon() {
 
 	logger.Printf("listening on %s", *socket)
 	go func() {
-		errors <- (&server.Server{
-			Socket:      *socket,
-			SocketGroup: *socketGroup,
-			Secret:      secret,
-			MaxTTL:      *maxTTL,
-			Backend:     backend,
-			Store:       blockStore,
-			Metrics:     registry,
-			Logger:      logger,
-		}).ListenAndServe(ctx)
+		errors <- decisionServer.ListenAndServe(ctx)
 	}()
 
 	select {
@@ -439,7 +458,7 @@ func reconcileFirewallRules(ctx context.Context, backend *firewall.ManagedBacken
 	}
 }
 
-func openBlockStore(path string, logger *log.Logger) server.BlockStore {
+func openBlockStore(path string, logger *log.Logger) *blocklist.FileStore {
 	store, err := blocklist.NewFileStore(path)
 	if err == nil {
 		_, err = store.List()

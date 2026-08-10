@@ -9,9 +9,12 @@ By default it intentionally does not:
 - expose a network control API;
 - require the Laravel PHP process to have root privileges.
 
-Gate mode does inspect only the request metadata explicitly forwarded by Nginx:
-the client IP, original URI and method, and cookies. It does not render CAPTCHA
-pages or process ALTCHA proofs. Laravel retains those responsibilities.
+Gate mode inspects only the request metadata explicitly forwarded by Nginx:
+the client IP, original URI and method, and cookies. It can block one client
+that exceeds its bounded request window, but does not inspect payloads, render
+CAPTCHA pages, or process ALTCHA proofs. Laravel retains those responsibilities.
+The gate also observes every accepted Laravel or manual block and denies that
+logical client before PHP; active ledger entries are restored after restart.
 
 ## Build and test
 
@@ -43,7 +46,8 @@ service has flushed them.
 Accepted block decisions are also recorded in
 `/var/lib/laravel-waf/blocks.json`. The record contains the normalized IP, the
 bounded reason from the decision, and its expiry time. The file is an audit and
-display ledger; `ipset` remains authoritative for enforcement.
+display ledger and restores gate denials after restart; `ipset` remains
+authoritative for network enforcement.
 If the ledger cannot be initialized or updated, the agent logs a warning and
 continues enforcing successful firewall operations. `list-ip` may be incomplete
 until the state-file problem is corrected.
@@ -161,6 +165,12 @@ sudo ./bin/lwafd \
   --gate-window 60s
 ```
 
+The gate also blocks an unverified client after 60 requests to one path or 120
+total requests in the same window, for 900 seconds. Override these advanced
+defaults with `--gate-client-threshold` and `--gate-block-ttl`, or set the
+client threshold to `0` to retain aggregate challenges without gate-generated
+firewall decisions.
+
 The one secret file must exactly match `LARAVEL_WAF_SECRET`. LWAFD uses that
 value for firewall decisions, browser-pass validation, and gate markers. It
 must contain at least 32 bytes.
@@ -179,4 +189,12 @@ The firewall decision protocol still accepts only `block_ip` and `unblock_ip`, v
 The gate listens on a separate Unix socket. Nginx is the only intended client.
 Invalid gate metadata is rejected, bypass paths are bounded, pass cookies are
 HMAC-verified and IP-bound, and challenge responses carry an authenticated
-marker that Laravel validates before rendering a page.
+marker that Laravel validates before rendering a page. Per-client counters are
+bounded to 65,536 entries per fixed window so spoofed identities cannot grow
+the daemon's memory without limit.
+
+The managed INPUT rule matches the packet's source address. When another host
+reverse-proxies traffic to this server, a forwarded public IP can still be
+denied by the local gate, but the backend firewall sees the proxy as its peer.
+Deploy network-layer blocking on the ingress proxy when the public client's
+packets must be dropped before reaching the backend.

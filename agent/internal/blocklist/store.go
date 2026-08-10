@@ -30,9 +30,9 @@ type diskState struct {
 	Blocks  []Record `json:"blocks"`
 }
 
-// FileStore keeps the reason and expiry for accepted block decisions. The
-// firewall kernel state remains authoritative for enforcement; this file is
-// the agent's explanation/audit ledger.
+// FileStore keeps the reason and expiry for accepted block decisions. IPSet
+// remains authoritative for network enforcement; the file is the audit ledger
+// and seeds the pre-application gate after an agent restart.
 type FileStore struct {
 	path string
 	now  func() time.Time

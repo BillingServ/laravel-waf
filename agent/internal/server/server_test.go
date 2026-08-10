@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BillingServ/laravel-waf/agent/internal/metrics"
 	"github.com/BillingServ/laravel-waf/agent/internal/protocol"
@@ -59,6 +60,18 @@ func (s *recordingStore) RemoveBlock(ip net.IP) error {
 
 type failingStore struct{}
 
+type recordingObserver struct {
+	blockedIP net.IP
+	expiresAt time.Time
+}
+
+func (o *recordingObserver) ObserveBlock(ip net.IP, expiresAt time.Time) {
+	o.blockedIP = append(net.IP(nil), ip...)
+	o.expiresAt = expiresAt
+}
+
+func (*recordingObserver) ObserveUnblock(net.IP) {}
+
 func (failingStore) RecordBlock(net.IP, int, string) error {
 	return errors.New("state unavailable")
 }
@@ -70,11 +83,13 @@ func (failingStore) RemoveBlock(net.IP) error {
 func TestHandleRecordsAcceptedBlockReason(t *testing.T) {
 	backend := &recordingBackend{}
 	store := &recordingStore{}
+	observer := &recordingObserver{}
 	service := &Server{
-		MaxTTL:  protocol.MaxTTLSeconds,
-		Backend: backend,
-		Store:   store,
-		Metrics: metrics.NewRegistry(),
+		MaxTTL:   protocol.MaxTTLSeconds,
+		Backend:  backend,
+		Store:    store,
+		Metrics:  metrics.NewRegistry(),
+		Observer: observer,
 	}
 
 	serverConnection, clientConnection := net.Pipe()
@@ -107,6 +122,30 @@ func TestHandleRecordsAcceptedBlockReason(t *testing.T) {
 		t.Fatalf("unexpected backend call: %#v", backend)
 	}
 	if store.ip.String() != "203.0.113.10" || store.ttl != 900 || store.reason != "rule_sql_injection" {
+		t.Fatalf("unexpected block record: %#v", store)
+	}
+	if observer.blockedIP.String() != "203.0.113.10" || time.Until(observer.expiresAt) <= 0 {
+		t.Fatalf("unexpected block observation: %#v", observer)
+	}
+}
+
+func TestLocalBlockUsesTheDecisionFirewallAndAuditPath(t *testing.T) {
+	backend := &recordingBackend{}
+	store := &recordingStore{}
+	service := &Server{
+		MaxTTL:  protocol.MaxTTLSeconds,
+		Backend: backend,
+		Store:   store,
+		Metrics: metrics.NewRegistry(),
+	}
+
+	if err := service.Block(context.Background(), net.ParseIP("203.0.113.20"), 900, "gate_rate_limit"); err != nil {
+		t.Fatalf("apply local block: %v", err)
+	}
+	if backend.blockedIP.String() != "203.0.113.20" || backend.blockedTTL != 900 {
+		t.Fatalf("unexpected backend call: %#v", backend)
+	}
+	if store.ip.String() != "203.0.113.20" || store.ttl != 900 || store.reason != "gate_rate_limit" {
 		t.Fatalf("unexpected block record: %#v", store)
 	}
 }

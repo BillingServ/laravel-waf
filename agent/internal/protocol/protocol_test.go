@@ -59,3 +59,27 @@ func TestDecisionRejectsUnsafeReason(t *testing.T) {
 		t.Fatal("expected unsafe reason to be rejected")
 	}
 }
+
+func TestDecisionRejectsLocalBlockTargetsButAllowsTheirRemoval(t *testing.T) {
+	for _, ip := range []string{"127.0.0.1", "127.0.0.42", "::1", "0.0.0.0", "::"} {
+		t.Run(ip, func(t *testing.T) {
+			decision := Decision{
+				Version:    Version,
+				Action:     "block_ip",
+				IP:         ip,
+				TTLSeconds: 900,
+				Reason:     "rule_xss",
+			}
+
+			if err := decision.Validate(MaxTTLSeconds); err == nil {
+				t.Fatal("expected local block target to be rejected")
+			}
+
+			decision.Action = "unblock_ip"
+			decision.TTLSeconds = 0
+			if err := decision.Validate(MaxTTLSeconds); err != nil {
+				t.Fatalf("expected local unblock target to remain valid: %v", err)
+			}
+		})
+	}
+}

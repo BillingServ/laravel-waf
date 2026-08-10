@@ -84,6 +84,23 @@ final class WafRulesTest extends TestCase
         self::assertSame(1, $decisionSink->blocks);
     }
 
+    public function test_loopback_findings_never_create_firewall_blocks(): void
+    {
+        config()->set('laravel-waf.agent.enabled', true);
+        config()->set('laravel-waf.agent.auto_block_on_finding', true);
+        $decisionSink = new RecordingDecisionSink();
+        app()->instance(DecisionSink::class, $decisionSink);
+
+        foreach (['127.0.0.1', '127.0.0.42', '::1'] as $ip) {
+            $this->withServerVariables(['REMOTE_ADDR' => $ip])
+                ->get('/inspect?name=%3Cscript%3Ealert(1)%3C%2Fscript%3E')
+                ->assertStatus(403)
+                ->assertHeader('X-Laravel-Waf-Blocked', 'true');
+        }
+
+        self::assertSame(0, $decisionSink->blocks);
+    }
+
     public function test_blocked_json_responses_keep_their_public_shapes(): void
     {
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.140'])

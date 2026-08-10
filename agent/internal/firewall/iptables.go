@@ -94,9 +94,13 @@ func (m *IPTablesRuleManager) ensureRule(ctx context.Context, executable, set st
 	if err := m.removeLegacyAllTrafficRule(ctx, executable, set); err != nil {
 		return err
 	}
+	if err := m.removeLoopbackUnsafeRule(ctx, executable, set); err != nil {
+		return err
+	}
 
 	rule := []string{
 		"INPUT",
+		"!", "-i", "lo",
 		"-p", "tcp",
 		"-m", "multiport", "--dports", m.TCPPorts,
 		"-m", "set", "--match-set", set, "src",
@@ -120,6 +124,35 @@ func (m *IPTablesRuleManager) ensureRule(ctx context.Context, executable, set st
 
 	if m.Logger != nil {
 		m.Logger.Printf("attached firewall rule to ipset %s", set)
+	}
+
+	return nil
+}
+
+func (m *IPTablesRuleManager) removeLoopbackUnsafeRule(ctx context.Context, executable, set string) error {
+	unsafeRule := []string{
+		"INPUT",
+		"-p", "tcp",
+		"-m", "multiport", "--dports", m.TCPPorts,
+		"-m", "set", "--match-set", set, "src",
+		"-j", "DROP",
+	}
+	check := append([]string{"-w", "5", "-C"}, unsafeRule...)
+	if err := m.Runner.Run(ctx, executable, check...); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+
+		return nil
+	}
+
+	remove := append([]string{"-w", "5", "-D"}, unsafeRule...)
+	if err := m.Runner.Run(ctx, executable, remove...); err != nil {
+		return fmt.Errorf("remove loopback-unsafe firewall rule: %w", err)
+	}
+
+	if m.Logger != nil {
+		m.Logger.Printf("removed loopback-unsafe firewall rule for ipset %s", set)
 	}
 
 	return nil

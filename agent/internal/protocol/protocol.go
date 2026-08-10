@@ -36,11 +36,15 @@ func (d Decision) Validate(maxTTL int) error {
 		return fmt.Errorf("unsupported action")
 	}
 
-	if net.ParseIP(d.IP) == nil {
+	ip := net.ParseIP(d.IP)
+	if ip == nil {
 		return fmt.Errorf("invalid IP address")
 	}
 
 	if d.Action == "block_ip" {
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			return fmt.Errorf("local IP addresses cannot be blocked")
+		}
 		if d.TTLSeconds < 1 || d.TTLSeconds > maxTTL {
 			return fmt.Errorf("TTL must be between 1 and %d seconds", maxTTL)
 		}

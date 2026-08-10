@@ -5,6 +5,7 @@ namespace BillingServ\LaravelWaf\Support;
 use BillingServ\LaravelWaf\Contracts\DecisionSink;
 use Illuminate\Cache\RateLimiter;
 use Psr\Log\LoggerInterface;
+use Symfony\Component\HttpFoundation\IpUtils;
 use Throwable;
 
 final class AgentBlocker
@@ -20,7 +21,8 @@ final class AgentBlocker
     public function block(string $ip, int $ttlSeconds, string $reason, string $scope): void
     {
         if (!config('laravel-waf.agent.enabled', false)
-            || filter_var($ip, FILTER_VALIDATE_IP) === false) {
+            || filter_var($ip, FILTER_VALIDATE_IP) === false
+            || IpUtils::checkIp($ip, ['127.0.0.0/8', '::1'])) {
             return;
         }
 

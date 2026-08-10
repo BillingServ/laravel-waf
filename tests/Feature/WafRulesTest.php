@@ -124,6 +124,29 @@ final class WafRulesTest extends TestCase
             ]);
     }
 
+    public function test_blocked_html_is_rendered_from_the_shared_package_template(): void
+    {
+        config()->set('laravel-waf.challenge.blocked_title', 'Access <stopped>.');
+        config()->set('laravel-waf.challenge.blocked_message', 'Matched the "production" policy.');
+
+        $template = file_get_contents(dirname(__DIR__, 2).'/resources/pages/blocked.html');
+        self::assertIsString($template);
+        self::assertStringContainsString('<!--@@BLOCKED_TITLE_START@@-->', $template);
+        self::assertStringContainsString('@@BLOCKED_REQUEST_ID@@', $template);
+
+        $response = $this->get('/_waf/blocked')
+            ->assertStatus(403)
+            ->assertSee('Access &lt;stopped&gt;.', false)
+            ->assertSee('Matched the &quot;production&quot; policy.', false)
+            ->assertDontSee('@@BLOCKED_TITLE_START@@', false)
+            ->assertDontSee('@@BLOCKED_REQUEST_ID@@', false);
+
+        $requestId = $response->headers->get('X-Request-ID');
+        self::assertIsString($requestId);
+        self::assertMatchesRegularExpression('/^[a-f0-9]{32}$/D', $requestId);
+        $response->assertSee($requestId, false);
+    }
+
     public function test_sql_injection_is_blocked(): void
     {
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.41'])

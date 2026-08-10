@@ -117,12 +117,16 @@ include /etc/nginx/conf.d/lwafd/server.conf;
 
 The include owns the exact `/prometheus` proxy, the private `auth_request`
 subrequest, Laravel's named dynamic and challenge locations, direct-PHP bypass
-protection, and the static blocked response. The role renders Laravel WAF's
-full blocked design once to
-`/etc/nginx/laravel-waf/__laravel_waf_blocked.html`, so blocked traffic does not
-boot PHP. The file sits in a subdirectory of `conf.d` so a conventional
-top-level `conf.d/*.conf` wildcard cannot accidentally load server-only
-locations in the global `http` context.
+protection, and the static blocked response. Laravel and Nginx both use the
+package's canonical `resources/pages/blocked.html` template. Nginx aliases the
+installed file directly from
+`<application-root>/vendor/billingserv/laravel-waf/resources/pages/blocked.html`
+and substitutes only the homepage target and its per-request `$request_id`;
+all visible copy and styling come from the package file. A Composer package
+update therefore updates both response paths without copying the file, running
+an extra deployment command, reloading Nginx, or booting PHP for blocked traffic.
+This requires the standard Nginx `http_sub_module` in addition to
+`http_auth_request_module`.
 
 The role validates the complete configuration with `nginx -t`, reloads only
 after successful validation, and restores both the site and include files if a

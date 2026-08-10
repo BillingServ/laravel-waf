@@ -116,24 +116,13 @@ final class ChallengePage
         $homeUrl = self::localUrl($retryUrl) ?? '/';
         $requestId = RequestId::normalize($requestId);
 
-        return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            .'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            .'<meta name="robots" content="noindex,nofollow">'
-            .'<meta name="color-scheme" content="dark">'
-            .'<title>Request blocked</title><style>'.self::blockedStyles().'</style></head>'
-            .'<body><main class="blocked-main"><div class="blocked-layout">'
-            .'<p class="blocked-code" aria-hidden="true">403</p>'
-            .'<div class="blocked-copy"><h1>'.self::escape($title).'</h1>'
-            .'<section class="blocked-item"><h2>Why have I been blocked?</h2>'
-            .'<p>'.self::escape($message).'</p></section>'
-            .'<section class="blocked-item"><h2>What can I do to resolve this?</h2>'
-            .'<p>Return to the previous page and try again. If the problem continues, contact the site owner and include the request ID below.</p></section>'
-            .'<a class="blocked-link" href="'.self::escape($homeUrl).'">Back to homepage</a>'
-            .'</div></div></main><footer class="blocked-footer">'
-            .'<p class="request-id">Request ID: <b>'.self::escape($requestId).'</b></p>'
-            .'<p class="attribution">Performance &amp; security by '
-            .'<a href="https://www.billingserv.com">BillingServ</a></p>'
-            .'</footer></body></html>';
+        $template = self::replaceBlockedSection(self::blockedTemplate(), 'TITLE', self::escape($title));
+        $template = self::replaceBlockedSection($template, 'MESSAGE', self::escape($message));
+
+        return strtr($template, [
+            '@@BLOCKED_HOME_URL@@' => self::escape($homeUrl),
+            '@@BLOCKED_REQUEST_ID@@' => self::escape($requestId),
+        ]);
     }
 
     public static function blockedFragment(
@@ -522,164 +511,59 @@ body[data-verification-state="verified"] .spinner-arc {
 CSS;
     }
 
-    private static function blockedStyles(): string
+    private static function blockedTemplate(): string
     {
-        return <<<'CSS'
-:root {
-    --text: #e9eef6;
-    --muted: #8994a8;
-    --dim: #5a6478;
-    --line: rgba(255, 255, 255, .075);
-    --blue: #74abff;
-    --blue-dim: #3e6db8;
-}
+        $template = @file_get_contents(dirname(__DIR__, 3).'/resources/pages/blocked.html');
+        $tokens = [
+            '<!--@@BLOCKED_TITLE_START@@-->',
+            '<!--@@BLOCKED_TITLE_END@@-->',
+            '<!--@@BLOCKED_MESSAGE_START@@-->',
+            '<!--@@BLOCKED_MESSAGE_END@@-->',
+            '@@BLOCKED_HOME_URL@@',
+            '@@BLOCKED_REQUEST_ID@@',
+        ];
 
-* { box-sizing: border-box; }
+        if (is_string($template)) {
+            foreach ($tokens as $token) {
+                if (!str_contains($template, $token)) {
+                    $template = null;
+                    break;
+                }
+            }
 
-html { background-color: #080d15; }
+            if ($template !== null) {
+                return $template;
+            }
+        }
 
-body {
-    display: flex;
-    min-height: 100vh;
-    min-height: 100dvh;
-    flex-direction: column;
-    margin: 0;
-    color: var(--text);
-    background-color: #080d15;
-    background-image:
-        radial-gradient(1100px 560px at 50% -12%, rgba(56, 96, 160, .10), rgba(56, 96, 160, 0) 70%),
-        linear-gradient(180deg, #0a101b 0%, #080c13 100%);
-    background-repeat: no-repeat;
-    background-attachment: fixed;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    font-size: 15px;
-    line-height: 1.6;
-    -webkit-font-smoothing: antialiased;
-}
+        return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            .'<meta name="viewport" content="width=device-width,initial-scale=1">'
+            .'<meta name="robots" content="noindex,nofollow"><title>Request blocked</title></head>'
+            .'<body><main><h1><!--@@BLOCKED_TITLE_START@@-->Request blocked'
+            .'<!--@@BLOCKED_TITLE_END@@--></h1>'
+            .'<p><!--@@BLOCKED_MESSAGE_START@@-->This request was blocked by the site security policy.'
+            .'<!--@@BLOCKED_MESSAGE_END@@--></p>'
+            .'<p>Request ID: <b>@@BLOCKED_REQUEST_ID@@</b></p>'
+            .'<p><a href="@@BLOCKED_HOME_URL@@">Back to homepage</a></p></main></body></html>';
+    }
 
-.blocked-main {
-    display: flex;
-    flex: 1 1 auto;
-    align-items: center;
-    justify-content: center;
-    padding: 64px 32px;
-}
+    private static function replaceBlockedSection(string $template, string $name, string $replacement): string
+    {
+        $start = '<!--@@BLOCKED_'.$name.'_START@@-->';
+        $end = '<!--@@BLOCKED_'.$name.'_END@@-->';
+        $startAt = strpos($template, $start);
+        if ($startAt === false) {
+            return $template;
+        }
 
-.blocked-layout {
-    display: grid;
-    width: 100%;
-    max-width: 880px;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: start;
-    gap: 64px;
-}
+        $endAt = strpos($template, $end, $startAt + strlen($start));
+        if ($endAt === false) {
+            return $template;
+        }
 
-.blocked-code {
-    margin: 0;
-    color: #edf2fa;
-    font-size: clamp(84px, 13vw, 132px);
-    font-weight: 700;
-    letter-spacing: -.045em;
-    line-height: .82;
-}
-
-.blocked-copy { padding-top: 4px; }
-
-.blocked-copy h1 {
-    max-width: 21ch;
-    margin: 0 0 30px;
-    font-size: clamp(21px, 3.2vw, 27px);
-    font-weight: 600;
-    letter-spacing: -.015em;
-    line-height: 1.34;
-}
-
-.blocked-item + .blocked-item { margin-top: 22px; }
-
-.blocked-item h2 {
-    margin: 0 0 5px;
-    color: var(--text);
-    font-size: 15px;
-    font-weight: 600;
-}
-
-.blocked-item p {
-    max-width: 56ch;
-    margin: 0;
-    color: var(--muted);
-    line-height: 1.65;
-}
-
-.blocked-link {
-    display: inline-block;
-    margin-top: 32px;
-    padding-bottom: 2px;
-    border-bottom: 1px solid transparent;
-    color: var(--blue);
-    font-size: 15px;
-    text-decoration: none;
-    transition: border-color .15s ease;
-}
-
-.blocked-link:hover { border-bottom-color: var(--blue-dim); }
-
-.blocked-footer {
-    flex: 0 0 auto;
-    padding: 22px 32px 26px;
-    border-top: 1px solid var(--line);
-    text-align: center;
-}
-
-.request-id {
-    margin: 0;
-    color: var(--muted);
-    font-size: 14px;
-}
-
-.request-id b {
-    color: var(--text);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 13px;
-    font-weight: 500;
-    letter-spacing: .02em;
-    overflow-wrap: anywhere;
-}
-
-.attribution {
-    margin: 7px 0 0;
-    color: var(--dim);
-    font-size: 13px;
-}
-
-.attribution a {
-    color: var(--blue);
-    text-decoration: none;
-}
-
-.attribution a:hover {
-    text-decoration: underline;
-    text-underline-offset: 3px;
-}
-
-:focus-visible {
-    border-radius: 2px;
-    outline: 2px solid var(--blue);
-    outline-offset: 3px;
-}
-
-@media (max-width: 700px) {
-    .blocked-main { padding: 48px 24px; }
-    .blocked-layout { grid-template-columns: 1fr; gap: 20px; }
-    .blocked-code { font-size: 68px; }
-    .blocked-copy { padding-top: 0; }
-    .blocked-copy h1 { max-width: none; }
-    .blocked-footer { padding: 20px 24px 24px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .blocked-link { transition: none; }
-}
-CSS;
+        return substr($template, 0, $startAt)
+            .$replacement
+            .substr($template, $endAt + strlen($end));
     }
 
     private static function styles(): string

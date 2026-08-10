@@ -158,11 +158,17 @@ final class WafRulesTest extends TestCase
             ->assertHeader('X-Laravel-Waf-Blocked', 'true')
             ->assertJsonPath('components.0.effects.dirty', []);
 
+        $requestId = $response->headers->get('X-Request-ID');
+        self::assertIsString($requestId);
+        self::assertMatchesRegularExpression('/^[a-f0-9]{32}$/D', $requestId);
+
         $effects = $response->json('components.0.effects');
         self::assertIsArray($effects);
         self::assertArrayNotHasKey('redirect', $effects);
         self::assertStringContainsString('Why have I been blocked?', (string) ($effects['html'] ?? ''));
-        self::assertStringContainsString('data-laravel-waf-blocked="true"', (string) ($effects['html'] ?? ''));
+        self::assertStringContainsString('data-request-blocked="true"', (string) ($effects['html'] ?? ''));
+        self::assertStringContainsString($requestId, (string) ($effects['html'] ?? ''));
+        self::assertStringContainsString('https://www.billingserv.com', (string) ($effects['html'] ?? ''));
         self::assertSame(1, $decisionSink->blocks);
 
         $this->get('/_waf/blocked')

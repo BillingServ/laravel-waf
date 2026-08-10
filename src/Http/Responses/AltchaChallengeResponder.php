@@ -4,6 +4,7 @@ namespace BillingServ\LaravelWaf\Http\Responses;
 
 use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
+use BillingServ\LaravelWaf\Support\RequestId;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -30,6 +31,9 @@ final class AltchaChallengeResponder implements ChallengeResponder
         if ($scope === 'test') {
             return BlockedResponse::make($request, includeBlockedFlag: true, scope: 'test');
         }
+
+        $requestId = RequestId::make();
+        $headers['X-Request-ID'] = $requestId;
 
         $field = $this->field();
         $challengeUrl = $this->safeUrl(config('laravel-waf.challenge.altcha.challenge_url'));
@@ -61,8 +65,18 @@ final class AltchaChallengeResponder implements ChallengeResponder
 
         $widget = $this->widget($challengeUrl, $field);
         $script = $this->script().$this->autoSubmitScript();
+        $automatic = $this->automatic();
 
-        $body = ChallengePage::required($this->title, $this->message, $verifyUrl, $token, $widget, $script);
+        $body = ChallengePage::required(
+            $this->title,
+            $this->message,
+            $verifyUrl,
+            $token,
+            $widget,
+            $script,
+            $automatic,
+            $requestId,
+        );
 
         $headers['Content-Type'] = 'text/html; charset=UTF-8';
 
@@ -86,9 +100,13 @@ final class AltchaChallengeResponder implements ChallengeResponder
             $attributes['hidelogo'] = null;
         }
 
-        $display = config('laravel-waf.challenge.altcha.display');
-        if (is_string($display) && $display !== '') {
+        $display = strtolower(trim((string) config('laravel-waf.challenge.altcha.display', '')));
+        if (in_array($display, ['standard', 'bar', 'floating', 'overlay', 'invisible'], true)) {
             $attributes['display'] = $display;
+        }
+        if ($display === 'invisible') {
+            $attributes['aria-hidden'] = 'true';
+            $attributes['tabindex'] = '-1';
         }
 
         $html = '<altcha-widget';
@@ -133,26 +151,84 @@ final class AltchaChallengeResponder implements ChallengeResponder
             .'var widget=document.querySelector("altcha-widget");'
             .'var form=widget&&widget.closest("form");'
             .'if(!widget||!form){return;}'
+            .'var page=form.closest("[data-page-state]");'
+            .'var shell=form.querySelector(".widget-shell");'
+            .'var label=form.querySelector("[data-verification-label]");'
+            .'var detail=form.querySelector("[data-verification-detail]");'
+            .'var fallback=form.querySelector("[data-verification-fallback]");'
+            .'var retry=form.querySelector(".verification-retry");'
+            .'var originalDisplay=widget.getAttribute("display")||"";'
             .'var fieldName='.$field.';'
             .'var submitted=false;'
+            .'var slowTimer=null;'
+            .'var setState=function(state,title,message){'
+            .'form.setAttribute("data-verification-state",state);'
+            .'if(page){page.setAttribute("data-verification-state",state);}'
+            .'if(label){label.textContent=title;}'
+            .'if(detail){detail.textContent=message;}'
+            .'};'
+            .'var showRetry=function(){'
+            .'if(fallback){fallback.hidden=false;}'
+            .'if(retry){retry.hidden=false;}'
+            .'};'
+            .'var revealWidget=function(){'
+            .'form.classList.add("requires-interaction");'
+            .'if(shell){shell.removeAttribute("aria-hidden");}'
+            .'widget.setAttribute("aria-hidden","false");'
+            .'if(originalDisplay==="invisible"){widget.setAttribute("display","standard");}'
+            .'};'
+            .'var fail=function(){'
+            .'clearTimeout(slowTimer);'
+            .'setState("failed","We could not complete the check","Reload the page to try again.");'
+            .'showRetry();'
+            .'};'
+            .'setState("verifying","Checking your browser","This usually takes only a few seconds.");'
+            .'slowTimer=setTimeout(function(){'
+            .'if(!submitted){'
+            .'setState("delayed","This is taking longer than expected","You can restart the check if it does not finish.");'
+            .'showRetry();'
+            .'}'
+            .'},15000);'
             .'var storePayload=function(payload){'
             .'if(payload===undefined||payload===null||payload===""){return false;}'
             .'var value=typeof payload==="string"?payload:JSON.stringify(payload);'
-            .'var input=form.querySelector("input[data-laravel-waf-altcha-payload]");'
+            .'var input=form.querySelector("input[data-altcha-payload]");'
             .'if(!input){input=document.createElement("input");input.type="hidden";'
-            .'input.name=fieldName;input.setAttribute("data-laravel-waf-altcha-payload","");'
+            .'input.name=fieldName;input.setAttribute("data-altcha-payload","");'
             .'form.appendChild(input);}'
             .'input.value=value;return true;'
             .'};'
             .'var submit=function(payload){if(submitted||!storePayload(payload)){return;}'
-            .'submitted=true;setTimeout(function(){form.submit();},0);};'
+            .'submitted=true;clearTimeout(slowTimer);'
+            .'setState("verified","Check complete","Continuing…");'
+            .'if(fallback){fallback.hidden=true;}'
+            .'if(retry){retry.hidden=true;}'
+            .'setTimeout(function(){form.submit();},120);};'
             .'widget.addEventListener("statechange",function(event){'
-            .'if(event.detail&&event.detail.state==="verified"){submit(event.detail.payload);}'
+            .'var state=event.detail&&event.detail.state;'
+            .'if(state==="verifying"){'
+            .'setState("verifying","Checking your browser","This usually takes only a few seconds.");'
+            .'}else if(state==="verified"){'
+            .'submit(event.detail.payload);'
+            .'}else if(state==="code"){'
+            .'clearTimeout(slowTimer);revealWidget();'
+            .'setState("interaction","Complete the browser check","One more step is required to continue.");'
+            .'}else if(state==="error"||state==="unverified"||state==="expired"){fail();}'
             .'});'
             .'widget.addEventListener("verified",function(event){'
             .'if(event.detail){submit(event.detail.payload);}'
             .'});'
+            .'if(retry){retry.addEventListener("click",function(){'
+            .'window.location.reload();'
+            .'});}'
             .'});</script>';
+    }
+
+    private function automatic(): bool
+    {
+        return (bool) config('laravel-waf.challenge.altcha.auto_submit', false)
+            && strtolower((string) config('laravel-waf.challenge.altcha.auto', 'onsubmit')) === 'onload'
+            && strtolower((string) config('laravel-waf.challenge.altcha.display', '')) === 'invisible';
     }
 
     private function verifyUrl(): ?string
@@ -192,8 +268,10 @@ final class AltchaChallengeResponder implements ChallengeResponder
         $headers['Content-Type'] = 'text/html; charset=UTF-8';
 
         return new Response(
-            '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Verification temporarily unavailable</title></head>'
-            .'<body><main><h1>Verification temporarily unavailable</h1><p>Please try again shortly.</p></main></body></html>',
+            ChallengePage::notice(
+                'Verification temporarily unavailable',
+                'The browser check cannot be completed right now. Please try again shortly.',
+            ),
             503,
             $headers,
         );

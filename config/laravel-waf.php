@@ -248,11 +248,11 @@ return [
         'enabled' => env('LARAVEL_WAF_CHALLENGE_ENABLED', $balanced),
         'provider' => env('LARAVEL_WAF_CHALLENGE_PROVIDER', $balanced ? 'altcha' : 'default'), // default|altcha
         'title' => env('LARAVEL_WAF_CHALLENGE_TITLE', $balanced ? 'Checking your browser' : 'Additional verification required'),
-        'message' => env('LARAVEL_WAF_CHALLENGE_MESSAGE', $balanced ? 'This security check will continue automatically.' : 'Please complete the verification before continuing.'),
+        'message' => env('LARAVEL_WAF_CHALLENGE_MESSAGE', $balanced ? 'This usually takes only a few seconds.' : 'Please complete the verification before continuing.'),
         'failure_title' => 'Verification failed',
         'failure_message' => 'We could not confirm this request. Please try again.',
-        'blocked_title' => 'Request blocked',
-        'blocked_message' => 'This request was blocked by the site security policy.',
+        'blocked_title' => 'Sorry, you’ve been blocked from viewing this page.',
+        'blocked_message' => 'This site uses automated security checks to protect against abusive or malicious traffic. The request matched a rule that prevents it from continuing.',
         'theme' => env('LARAVEL_WAF_CHALLENGE_THEME', 'auto'), // auto|light|dark
         // Optional white-label identity. Nothing is shown when these are empty.
         'brand_name' => env('LARAVEL_WAF_CHALLENGE_BRAND_NAME'),
@@ -313,7 +313,6 @@ return [
         'enabled' => env('LARAVEL_WAF_TESTING_ENABLED', false),
         'parameter' => env('LARAVEL_WAF_TESTING_PARAMETER', 'test'),
         'value' => env('LARAVEL_WAF_TESTING_VALUE'),
-        'allow_production' => env('LARAVEL_WAF_TESTING_ALLOW_PRODUCTION', false),
     ],
 
     'agent' => [

@@ -44,7 +44,7 @@ final class ConfigurationPresetTest extends TestCase
         self::assertTrue($config['challenge']['enabled']);
         self::assertSame('altcha', $config['challenge']['provider']);
         self::assertSame('Checking your browser', $config['challenge']['title']);
-        self::assertSame('This security check will continue automatically.', $config['challenge']['message']);
+        self::assertSame('This usually takes only a few seconds.', $config['challenge']['message']);
         self::assertSame(3600, $config['challenge']['cookie_ttl_seconds']);
         self::assertTrue($config['challenge']['cookie_secure']);
         self::assertSame('onload', $config['challenge']['altcha']['auto']);

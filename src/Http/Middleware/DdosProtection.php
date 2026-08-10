@@ -46,7 +46,6 @@ final class DdosProtection
         }
 
         if ($this->isTestTrigger($request)) {
-            $request->attributes->set('laravel-waf.challenge_return_to', $this->testReturnTo($request));
             $this->metrics->decision('blocked_test', 'test', $route);
 
             return $this->finish(
@@ -299,8 +298,7 @@ final class DdosProtection
     private function isTestTrigger(Request $request): bool
     {
         if (!config('laravel-waf.testing.enabled', false)
-            || !config('laravel-waf.challenge.enabled', false)
-            || (app()->environment('production') && !config('laravel-waf.testing.allow_production', false))) {
+            || !config('laravel-waf.challenge.enabled', false)) {
             return false;
         }
 
@@ -323,18 +321,4 @@ final class DdosProtection
         return is_string($value) && hash_equals($expected, $value);
     }
 
-    private function testReturnTo(Request $request): string
-    {
-        $uri = $request->getRequestUri();
-        [$path, $query] = array_pad(explode('?', $uri, 2), 2, null);
-        $parameter = (string) config('laravel-waf.testing.parameter', 'test');
-
-        if (is_string($query) && $query !== '') {
-            parse_str($query, $parameters);
-            unset($parameters[$parameter]);
-            $query = http_build_query($parameters);
-        }
-
-        return $path.($query !== '' ? '?'.$query : '');
-    }
 }

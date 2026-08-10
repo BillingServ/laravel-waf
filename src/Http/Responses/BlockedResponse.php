@@ -2,6 +2,7 @@
 
 namespace BillingServ\LaravelWaf\Http\Responses;
 
+use BillingServ\LaravelWaf\Support\RequestId;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -15,13 +16,15 @@ final class BlockedResponse
         ?string $scope = null,
         bool $supportLivewire = true,
     ): Response {
+        $requestId = RequestId::make();
         $headers = [
             'Cache-Control' => 'no-store',
             'X-Laravel-Waf-Blocked' => 'true',
+            'X-Request-ID' => $requestId,
         ];
 
         if ($supportLivewire) {
-            $livewire = LivewireResponse::blocked($request, $headers);
+            $livewire = LivewireResponse::blocked($request, $headers, $requestId);
             if ($livewire !== null) {
                 return $livewire;
             }
@@ -41,9 +44,10 @@ final class BlockedResponse
 
         $retryUrl = $request->attributes->get('laravel-waf.challenge_return_to');
         $body = ChallengePage::blocked(
-            (string) config('laravel-waf.challenge.blocked_title', 'Request blocked'),
-            (string) config('laravel-waf.challenge.blocked_message', 'This request was blocked by the site security policy.'),
+            (string) config('laravel-waf.challenge.blocked_title', 'Sorry, you’ve been blocked from viewing this page.'),
+            (string) config('laravel-waf.challenge.blocked_message', 'This site uses automated security checks to protect against abusive or malicious traffic. The request matched a rule that prevents it from continuing.'),
             is_string($retryUrl) ? $retryUrl : null,
+            $requestId,
         );
         $headers['Content-Type'] = 'text/html; charset=UTF-8';
 

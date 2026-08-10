@@ -15,7 +15,7 @@ final class LivewireResponse
      * Rendering the state in the current response avoids a second browser
      * request to the blocked route, which iptables cannot exempt by URI.
      */
-    public static function blocked(Request $request, array $headers = []): ?Response
+    public static function blocked(Request $request, array $headers = [], ?string $requestId = null): ?Response
     {
         if (!self::isUpdateRequest($request)) {
             return null;
@@ -32,7 +32,7 @@ final class LivewireResponse
                 $responses[] = [
                     'snapshot' => $component['snapshot'],
                     'effects' => [
-                        'html' => self::blockedFragment($component['snapshot']),
+                        'html' => self::blockedFragment($component['snapshot'], null, $requestId),
                         'dirty' => [],
                     ],
                 ];
@@ -51,7 +51,7 @@ final class LivewireResponse
 
         return new JsonResponse([
             'effects' => [
-                'html' => self::blockedFragment(null, $request),
+                'html' => self::blockedFragment(null, $request, $requestId),
                 'dirty' => [],
             ],
             'serverMemo' => $serverMemo,
@@ -63,7 +63,11 @@ final class LivewireResponse
         return $request->hasHeader('X-Livewire');
     }
 
-    private static function blockedFragment(?string $snapshot, ?Request $request = null): string
+    private static function blockedFragment(
+        ?string $snapshot,
+        ?Request $request = null,
+        ?string $requestId = null,
+    ): string
     {
         $componentId = self::componentId($snapshot);
         if ($componentId === null && $request !== null) {
@@ -72,9 +76,10 @@ final class LivewireResponse
         }
 
         return ChallengePage::blockedFragment(
-            (string) config('laravel-waf.challenge.blocked_title', 'Request blocked'),
-            (string) config('laravel-waf.challenge.blocked_message', 'This request was blocked by the site security policy.'),
+            (string) config('laravel-waf.challenge.blocked_title', 'Sorry, you’ve been blocked from viewing this page.'),
+            (string) config('laravel-waf.challenge.blocked_message', 'This site uses automated security checks to protect against abusive or malicious traffic. The request matched a rule that prevents it from continuing.'),
             $componentId,
+            $requestId,
         );
     }
 

@@ -182,16 +182,36 @@ final class DdosProtectionTest extends TestCase
         $this->withServerVariables($server)->get('/limited');
         $this->withServerVariables($server)->get('/limited');
 
-        $this->withServerVariables($server)
-            ->get('/limited')
+        $response = $this->withServerVariables($server)->get('/limited');
+
+        $response
             ->assertStatus(429)
+            ->assertHeader('X-Laravel-Waf-Challenge', 'required')
             ->assertSee('auto="onload"', false)
             ->assertSee('display="invisible"', false)
+            ->assertSee('class="verification-form is-automatic"', false)
+            ->assertSee('class="verification-layout"', false)
+            ->assertSee('class="verification-spinner"', false)
+            ->assertSee('data-altcha-visibility="concealed"', false)
+            ->assertSee('data-verification-label', false)
+            ->assertSee('This usually takes only a few seconds.')
+            ->assertSee('This check is automatic. You will continue as soon as it is complete.')
+            ->assertSee('Reload the page')
+            ->assertSee('Performance & security by')
+            ->assertSee('https://www.billingserv.com', false)
+            ->assertDontSee('class="verification-submit"', false)
+            ->assertDontSee('Laravel WAF')
             ->assertSee('statechange', false)
             ->assertSee('event.detail.payload', false)
-            ->assertSee('data-laravel-waf-altcha-payload', false)
+            ->assertSee('data-altcha-payload', false)
             ->assertSee('input.name=fieldName', false)
+            ->assertSee('widget.setAttribute("display","standard")', false)
             ->assertSee('form.submit()', false);
+
+        $requestId = $response->headers->get('X-Request-ID');
+        self::assertIsString($requestId);
+        self::assertMatchesRegularExpression('/^[a-f0-9]{32}$/D', $requestId);
+        $response->assertSee($requestId);
     }
 
     public function test_challenge_cookie_is_excluded_from_laravel_cookie_encryption(): void
@@ -221,6 +241,9 @@ final class DdosProtectionTest extends TestCase
 
         $challenge->assertStatus(429)
             ->assertSee('altcha-widget')
+            ->assertSee('class="verification-submit"', false)
+            ->assertSee('Continue')
+            ->assertDontSee('class="verification-form is-automatic"', false)
             ->assertSee('/_waf/challenge/verify');
 
         preg_match('/name="_waf_challenge" value="([^"]+)"/', $challenge->getContent(), $matches);
@@ -246,7 +269,7 @@ final class DdosProtectionTest extends TestCase
             'altcha' => $this->validAltchaPayload(),
         ])->assertStatus(422)
             ->assertSee('Verification failed')
-            ->assertSee('Verification could not be completed.');
+            ->assertSee('The request was not continued.');
     }
 
     public function test_global_waf_allows_the_internal_challenge_verification_request(): void
@@ -287,26 +310,48 @@ final class DdosProtectionTest extends TestCase
             ->assertOk();
     }
 
-    public function test_opt_in_test_query_parameter_displays_the_blocked_page(): void
+    public function test_opt_in_test_query_parameter_displays_the_blocked_page_in_production(): void
     {
+        $this->app['env'] = 'production';
         config()->set('laravel-waf.testing.enabled', true);
         config()->set('laravel-waf.challenge.provider', 'altcha');
-        config()->set('laravel-waf.challenge.theme', 'dark');
         config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost/altcha/challenge');
         config()->set('laravel-waf.challenge.altcha.hmac_key', 'test-altcha-secret');
 
         $server = ['REMOTE_ADDR' => '203.0.113.30'];
-        $this->withServerVariables($server)
-            ->get('/limited?test')
+        $response = $this->withServerVariables($server)->get('/limited?test');
+
+        $response
             ->assertStatus(403)
             ->assertHeader('X-Laravel-Waf-Blocked', 'true')
-            ->assertSee('theme-dark')
+            ->assertSee('class="blocked-layout"', false)
+            ->assertSee('Sorry, you’ve been blocked from viewing this page.')
             ->assertSee('Why have I been blocked?')
             ->assertSee('What can I do to resolve this?')
+            ->assertSee('Request ID:')
+            ->assertSee('Performance & security by')
+            ->assertSee('class="blocked-link" href="/"', false)
+            ->assertSee('https://www.billingserv.com', false)
+            ->assertSee('BillingServ')
             ->assertDontSee('Additional verification required')
             ->assertDontSee('Verification failed')
             ->assertDontSee('Laravel WAF')
             ->assertDontSee('<altcha-widget');
+
+        $requestId = $response->headers->get('X-Request-ID');
+        self::assertIsString($requestId);
+        self::assertMatchesRegularExpression('/^[a-f0-9]{32}$/D', $requestId);
+        $response->assertSee($requestId);
+    }
+
+    public function test_test_query_parameter_is_ignored_in_production_until_enabled(): void
+    {
+        $this->app['env'] = 'production';
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.31'])
+            ->get('/limited?test')
+            ->assertOk()
+            ->assertDontSee('class="blocked-layout"', false);
     }
 
     public function test_opt_in_test_query_parameter_keeps_the_blocked_json_shape(): void

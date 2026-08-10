@@ -46,7 +46,7 @@ behaviour needs to differ from the preset:
 
 ```dotenv
 LARAVEL_WAF_CHALLENGE_TITLE="Checking your browser"
-LARAVEL_WAF_CHALLENGE_MESSAGE="This security check will continue automatically."
+LARAVEL_WAF_CHALLENGE_MESSAGE="This usually takes only a few seconds."
 LARAVEL_WAF_ALTCHA_AUTO=onload
 LARAVEL_WAF_ALTCHA_AUTO_SUBMIT=true
 LARAVEL_WAF_ALTCHA_DISPLAY=invisible
@@ -54,17 +54,21 @@ LARAVEL_WAF_CHALLENGE_COOKIE_TTL=3600
 ```
 
 The widget starts on page load and submits the verification form as soon as
-ALTCHA reports a verified proof. The Continue button remains as a fallback.
+ALTCHA reports a verified proof. In automatic invisible mode, both the widget
+and manual control stay concealed while the page shows a live progress state.
+A reload action appears only if verification takes too long or fails. If
+ALTCHA explicitly requests an interactive challenge, the widget is revealed so
+the visitor is not trapped. Non-automatic integrations retain the visible
+Continue button.
 
 `LARAVEL_WAF_ALTCHA_CHALLENGE_ATTRIBUTE` may be `challengeurl` for the
 existing widget integration or `challenge` for newer widget integrations.
 The challenge field and script URL are configurable so the WAF does not need
 to own the application's frontend setup.
 
-The interstitial is white-labeled by default and does not display the package
-name. Set the optional challenge brand, logo, and favicon variables when the
-site should identify itself on the page. Logo and favicon URLs may be
-same-origin paths or HTTPS URLs.
+The visitor-facing verification and blocked pages do not display the package
+name. They use a small BillingServ security attribution and include an opaque
+request ID that is also returned in the `X-Request-ID` response header.
 
 `LARAVEL_WAF_CHALLENGE_COOKIE_SECURE=auto` marks the pass cookie as secure when
 the current request is HTTPS and leaves it usable for local HTTP development.
@@ -138,17 +142,16 @@ Then open any route that uses the WAF middleware with `?test`, for example:
 https://example.test/login?test
 ```
 
-The trigger is disabled by default and is ignored in production. It can be
-enabled deliberately in production with `LARAVEL_WAF_TESTING_ALLOW_PRODUCTION`
-but should normally only be used in local or staging environments. The
-parameter name and an optional required value are configurable with
-`LARAVEL_WAF_TESTING_PARAMETER` and `LARAVEL_WAF_TESTING_VALUE`.
+The trigger is disabled by default. Enabling `LARAVEL_WAF_TESTING_ENABLED`
+activates it in every environment, including production, so disable it again
+after checking the deployed page. The parameter name and an optional required
+value are configurable with `LARAVEL_WAF_TESTING_PARAMETER` and
+`LARAVEL_WAF_TESTING_VALUE`.
 
 The trigger returns a `403` blocked response and never issues a challenge
 token or verification cookie. It is intended for checking the blocked state
 of the page; normal challenge behavior is still exercised by exceeding the
-configured limit. Set `LARAVEL_WAF_CHALLENGE_THEME=dark` to force the dark
-theme, or leave it as `auto` to follow the visitor's system preference.
+configured limit.
 
 ## Livewire and Filament
 

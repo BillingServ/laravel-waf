@@ -5,23 +5,29 @@ namespace BillingServ\LaravelWaf\Http\Responses;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Throwable;
 
 final class LivewireResponse
 {
     /**
-     * Return a Livewire response that renders the blocked state in-place.
+     * Return the Livewire response shape for a top-level blocked-page redirect.
      *
-     * A blocked IP may already be in an ipset before this response is sent.
-     * Rendering the state in the current response avoids a second browser
-     * request to the blocked route, which iptables cannot exempt by URI.
+     * Livewire requires a successful JSON response for client-side redirects.
+     * The incoming snapshots are returned unchanged so the client can finish
+     * the current commit before navigating away.
      */
-    public static function blocked(Request $request, array $headers = [], ?string $requestId = null): ?Response
+    public static function blocked(Request $request, array $headers = []): ?Response
     {
         if (!self::isUpdateRequest($request)) {
             return null;
         }
 
+        $url = self::blockedUrl();
         $components = $request->input('components');
+        if ($url === null) {
+            return null;
+        }
+
         if (is_array($components) && $components !== []) {
             $responses = [];
             foreach ($components as $component) {
@@ -31,10 +37,7 @@ final class LivewireResponse
 
                 $responses[] = [
                     'snapshot' => $component['snapshot'],
-                    'effects' => [
-                        'html' => self::blockedFragment($component['snapshot'], null, $requestId),
-                        'dirty' => [],
-                    ],
+                    'effects' => ['redirect' => $url],
                 ];
             }
 
@@ -51,8 +54,9 @@ final class LivewireResponse
 
         return new JsonResponse([
             'effects' => [
-                'html' => self::blockedFragment(null, $request, $requestId),
+                'html' => null,
                 'dirty' => [],
+                'redirect' => $url,
             ],
             'serverMemo' => $serverMemo,
         ], 200, $headers);
@@ -63,48 +67,17 @@ final class LivewireResponse
         return $request->hasHeader('X-Livewire');
     }
 
-    private static function blockedFragment(
-        ?string $snapshot,
-        ?Request $request = null,
-        ?string $requestId = null,
-    ): string
+    private static function blockedUrl(): ?string
     {
-        $componentId = self::componentId($snapshot);
-        if ($componentId === null && $request !== null) {
-            $componentId = self::safeComponentId($request->input('fingerprint.id'))
-                ?? self::safeComponentId($request->input('serverMemo.id'));
-        }
-
-        return ChallengePage::blockedFragment(
-            (string) config('laravel-waf.challenge.blocked_title', 'Sorry, you’ve been blocked from viewing this page.'),
-            (string) config('laravel-waf.challenge.blocked_message', 'This site uses automated security checks to protect against abusive or malicious traffic. The request matched a rule that prevents it from continuing.'),
-            $componentId,
-            $requestId,
-        );
-    }
-
-    private static function componentId(?string $snapshot): ?string
-    {
-        if ($snapshot === null || $snapshot === '') {
-            return null;
-        }
-
         try {
-            $decoded = json_decode($snapshot, true, 32, JSON_THROW_ON_ERROR);
-        } catch (\Throwable) {
+            $route = config('laravel-waf.challenge.blocked_route', 'laravel-waf.blocked');
+            if (!is_string($route) || $route === '') {
+                return null;
+            }
+
+            return route($route);
+        } catch (Throwable) {
             return null;
         }
-
-        return is_array($decoded)
-            ? self::safeComponentId($decoded['memo']['id'] ?? null)
-            : null;
-    }
-
-    private static function safeComponentId(mixed $componentId): ?string
-    {
-        return is_string($componentId)
-            && preg_match('/^[A-Za-z0-9_-]{1,128}$/', $componentId) === 1
-            ? $componentId
-            : null;
     }
 }

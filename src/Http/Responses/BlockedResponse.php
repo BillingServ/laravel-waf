@@ -24,7 +24,7 @@ final class BlockedResponse
         ];
 
         if ($supportLivewire) {
-            $livewire = LivewireResponse::blocked($request, $headers, $requestId);
+            $livewire = LivewireResponse::blocked($request, $headers);
             if ($livewire !== null) {
                 return $livewire;
             }

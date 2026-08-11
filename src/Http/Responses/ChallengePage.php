@@ -125,39 +125,6 @@ final class ChallengePage
         ]);
     }
 
-    public static function blockedFragment(
-        string $title = 'Sorry, you’ve been blocked from viewing this page.',
-        string $message = 'This site uses automated security checks to protect against abusive or malicious traffic. The request matched a rule that prevents it from continuing.',
-        ?string $componentId = null,
-        ?string $requestId = null,
-    ): string {
-        $wireId = $componentId === null
-            ? ''
-            : ' wire:id="'.self::escape($componentId).'"';
-        $requestId = RequestId::normalize($requestId);
-
-        return '<div'.$wireId.' class="security-blocked-fragment" role="alert" '
-            .'data-request-blocked="true" '
-            .'style="box-sizing:border-box;width:100%;max-width:880px;margin:24px auto;color:#e9eef6;'
-            .'background:#080d15;border:1px solid rgba(255,255,255,.075);font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Arial,sans-serif;text-align:left">'
-            .'<div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:28px 48px;padding:44px 36px">'
-            .'<p aria-hidden="true" style="margin:0;color:#edf2fa;font-size:72px;font-weight:700;line-height:.82;letter-spacing:-.045em">403</p>'
-            .'<div style="min-width:0;flex:1 1 300px">'
-            .'<h1 style="max-width:21ch;margin:0 0 26px;color:#e9eef6;font-size:25px;font-weight:600;letter-spacing:-.015em;line-height:1.34">'
-            .self::escape($title).'</h1>'
-            .'<section><strong style="display:block;margin-bottom:5px;color:#e9eef6;font-size:15px">Why have I been blocked?</strong>'
-            .'<p style="max-width:56ch;margin:0;color:#8994a8;font-size:15px;line-height:1.65">'.self::escape($message).'</p></section>'
-            .'<section style="margin-top:22px"><strong style="display:block;margin-bottom:5px;color:#e9eef6;font-size:15px">What can I do to resolve this?</strong>'
-            .'<p style="max-width:56ch;margin:0;color:#8994a8;font-size:15px;line-height:1.65">Return to the previous page and try again. If the problem continues, contact the site owner and include the request ID below.</p></section>'
-            .'</div></div>'
-            .'<div style="padding:18px 28px 20px;border-top:1px solid rgba(255,255,255,.075);text-align:center">'
-            .'<p style="margin:0;color:#8994a8;font-size:13px">Request ID: <b style="color:#e9eef6;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:500">'
-            .self::escape($requestId).'</b></p>'
-            .'<p style="margin:6px 0 0;color:#5a6478;font-size:12px">Performance &amp; security by '
-            .'<a href="https://www.billingserv.com" style="color:#74abff;text-decoration:none">BillingServ</a></p>'
-            .'</div></div>';
-    }
-
     private static function document(string $title, string $state, string $content, string $head = ''): string
     {
         $favicon = self::assetUrl(config('laravel-waf.challenge.favicon_url'));

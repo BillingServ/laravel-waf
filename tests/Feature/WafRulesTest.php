@@ -154,7 +154,7 @@ final class WafRulesTest extends TestCase
             ->assertStatus(403);
     }
 
-    public function test_livewire_sql_injection_renders_the_blocked_state_without_a_follow_up_request(): void
+    public function test_livewire_sql_injection_redirects_to_the_top_level_blocked_page(): void
     {
         config()->set('laravel-waf.agent.enabled', true);
         config()->set('laravel-waf.agent.auto_block_on_finding', true);
@@ -179,19 +179,7 @@ final class WafRulesTest extends TestCase
 
         $response->assertOk()
             ->assertHeader('X-Laravel-Waf-Blocked', 'true')
-            ->assertJsonPath('components.0.effects.dirty', []);
-
-        $requestId = $response->headers->get('X-Request-ID');
-        self::assertIsString($requestId);
-        self::assertMatchesRegularExpression('/^[a-f0-9]{32}$/D', $requestId);
-
-        $effects = $response->json('components.0.effects');
-        self::assertIsArray($effects);
-        self::assertArrayNotHasKey('redirect', $effects);
-        self::assertStringContainsString('Why have I been blocked?', (string) ($effects['html'] ?? ''));
-        self::assertStringContainsString('data-request-blocked="true"', (string) ($effects['html'] ?? ''));
-        self::assertStringContainsString($requestId, (string) ($effects['html'] ?? ''));
-        self::assertStringContainsString('https://www.billingserv.com', (string) ($effects['html'] ?? ''));
+            ->assertJsonPath('components.0.effects.redirect', url('/_waf/blocked'));
         self::assertSame(1, $decisionSink->blocks);
 
         $this->get('/_waf/blocked')
@@ -212,12 +200,8 @@ final class WafRulesTest extends TestCase
                 'updates' => [],
             ]);
         $legacyResponse->assertOk()
-            ->assertJsonPath('effects.dirty', [])
+            ->assertJsonPath('effects.redirect', url('/_waf/blocked'))
             ->assertJsonPath('serverMemo.data.email', '=1 UNION SELECT password FROM users');
-
-        $legacyEffects = $legacyResponse->json('effects');
-        self::assertIsArray($legacyEffects);
-        self::assertStringContainsString('Why have I been blocked?', (string) ($legacyEffects['html'] ?? ''));
     }
 
     public function test_rfi_is_blocked_for_a_file_like_parameter(): void

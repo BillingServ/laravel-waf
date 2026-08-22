@@ -306,6 +306,14 @@ final class WafRulesTest extends TestCase
             ->assertStatus(403);
     }
 
+    public function test_ssrf_does_not_misclassify_nested_domain_fields(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.58'])
+            ->post('/inspect', ['domains' => [['years' => '1 year']]])
+            ->assertOk()
+            ->assertContent('ok');
+    }
+
     public function test_findings_can_be_logged_without_blocking(): void
     {
         config()->set('laravel-waf.rules.mode', 'log');

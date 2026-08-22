@@ -55,8 +55,16 @@ final class SsrfRule extends PatternRule
     /** @param array<int, mixed> $fields */
     private function fieldMatches(string $field, array $fields): bool
     {
+        $field = strtolower($field);
+
         foreach ($fields as $candidate) {
-            if (is_string($candidate) && str_contains(strtolower($field), strtolower(trim($candidate)))) {
+            if (!is_string($candidate)) {
+                continue;
+            }
+
+            $candidate = strtolower(trim($candidate));
+            if ($candidate !== ''
+                && preg_match('~(?:^|[._:-])'.preg_quote($candidate, '~').'(?=$|[._:-])~', $field) === 1) {
                 return true;
             }
         }

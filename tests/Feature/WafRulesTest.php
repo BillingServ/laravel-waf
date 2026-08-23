@@ -211,6 +211,14 @@ final class WafRulesTest extends TestCase
             ->assertStatus(403);
     }
 
+    public function test_public_return_urls_are_not_misclassified_as_rfi(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.42'])
+            ->get('/inspect?redirect=https%3A%2F%2Fqa.bserv.dev%2Fcheckout&url=https%3A%2F%2Fqa.bserv.dev%2Fcheckout')
+            ->assertOk()
+            ->assertContent('ok');
+    }
+
     public function test_lfi_is_blocked(): void
     {
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.43'])

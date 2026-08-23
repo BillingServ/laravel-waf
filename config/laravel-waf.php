@@ -100,7 +100,7 @@ return [
                 'enabled' => env('LARAVEL_WAF_RFI_ENABLED', true),
                 'action' => env('LARAVEL_WAF_RFI_ACTION'),
                 'exclude_fields' => [],
-                'remote_url_fields' => ['file', 'path', 'page', 'include', 'template', 'module', 'resource', 'url'],
+                'remote_url_fields' => ['file', 'path', 'page', 'include', 'template', 'module', 'resource'],
                 'allowed_remote_hosts' => [],
             ],
             'lfi' => [

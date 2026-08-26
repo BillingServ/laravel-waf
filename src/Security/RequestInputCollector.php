@@ -3,6 +3,7 @@
 namespace BillingServ\LaravelWaf\Security;
 
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 
 final class RequestInputCollector
 {
@@ -54,6 +55,19 @@ final class RequestInputCollector
             }
         }
 
+        // Client-supplied file names are a classic traversal/injection vector.
+        if (($config['files'] ?? true) === true) {
+            $this->uploads(
+                $request,
+                $values,
+                $totalBytes,
+                $maxValues,
+                $maxDepth,
+                $maxValueBytes,
+                $maxTotalBytes,
+            );
+        }
+
         if (($config['headers'] ?? false) === true) {
             $this->walk($values, $totalBytes, $maxValues, $maxValueBytes, $maxTotalBytes, 'header', $request->headers->all(), 0, $maxDepth);
         }
@@ -65,6 +79,101 @@ final class RequestInputCollector
         $request->attributes->set('laravel-waf.input_values', $values);
 
         return $values;
+    }
+
+    /**
+     * Uploads walk the file tree directly so traversal stops as soon as the
+     * collector caps are reached, and each name keeps its nested field path
+     * (e.g. "uploads.0") so per-field exclude_fields settings keep working.
+     *
+     * @param array<int, InputValue> $values
+     */
+    private function uploads(
+        Request $request,
+        array &$values,
+        int &$totalBytes,
+        int $maxValues,
+        int $maxDepth,
+        int $maxValueBytes,
+        int $maxTotalBytes,
+    ): void {
+        $this->walkUploads(
+            $request->allFiles(),
+            '',
+            $values,
+            $totalBytes,
+            0,
+            $maxValues,
+            $maxDepth,
+            $maxValueBytes,
+            $maxTotalBytes,
+        );
+    }
+
+    /**
+     * @param array<int|string, mixed> $files
+     * @param array<int, InputValue> $values
+     */
+    private function walkUploads(
+        array $files,
+        string $prefix,
+        array &$values,
+        int &$totalBytes,
+        int $depth,
+        int $maxValues,
+        int $maxDepth,
+        int $maxValueBytes,
+        int $maxTotalBytes,
+    ): void {
+        if ($depth > $maxDepth) {
+            return;
+        }
+
+        foreach ($files as $key => $file) {
+            if (count($values) >= $maxValues || $totalBytes >= $maxTotalBytes) {
+                return;
+            }
+
+            $field = ($prefix === '' ? '' : $prefix.'.').preg_replace('/[^A-Za-z0-9_.:-]/', '_', (string) $key);
+
+            if ($file instanceof UploadedFile) {
+                // Browsers control both values; Symfony keeps the basename in
+                // getClientOriginalName() and the client-relative directory in
+                // getClientOriginalPath(), so inspect them separately.
+                $this->add($values, $totalBytes, $maxValues, $maxValueBytes, $maxTotalBytes, new InputValue(
+                    'file',
+                    $field !== '' ? $field : 'file',
+                    $file->getClientOriginalName() ?: 'upload',
+                ));
+
+                if (method_exists($file, 'getClientOriginalPath')) {
+                    $path = $file->getClientOriginalPath();
+                    if (is_string($path) && $path !== '' && $path !== $file->getClientOriginalName()) {
+                        $this->add($values, $totalBytes, $maxValues, $maxValueBytes, $maxTotalBytes, new InputValue(
+                            'file',
+                            $field !== '' ? $field.'.path' : 'file.path',
+                            $path,
+                        ));
+                    }
+                }
+
+                continue;
+            }
+
+            if (is_array($file)) {
+                $this->walkUploads(
+                    $file,
+                    $field,
+                    $values,
+                    $totalBytes,
+                    $depth + 1,
+                    $maxValues,
+                    $maxDepth,
+                    $maxValueBytes,
+                    $maxTotalBytes,
+                );
+            }
+        }
     }
 
     /** @param array<int, InputValue> $values */
@@ -139,7 +248,14 @@ final class RequestInputCollector
             return;
         }
 
-        $values[] = new InputValue($input->source, $input->field, substr($input->value, 0, $length));
+        // Normalization happens exactly here, once per value per request.
+        // Every inspection rule then reads the same decoded string instead of
+        // re-decoding it once per rule.
+        $values[] = new InputValue(
+            $input->source,
+            $input->field,
+            InputNormalizer::normalize(substr($input->value, 0, $length)),
+        );
         $totalBytes += $length;
     }
 }

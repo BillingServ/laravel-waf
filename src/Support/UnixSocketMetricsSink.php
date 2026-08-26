@@ -60,6 +60,8 @@ final class UnixSocketMetricsSink implements MetricsSink
             }
 
             $timeout = max(0.001, min(0.025, $this->timeoutMilliseconds / 1000));
+            // One event per connection: the Go agent closes the socket after
+            // a single line, so persistent pooling would reuse dead streams.
             $client = @stream_socket_client(
                 'unix://'.$this->socket,
                 $errorNumber,

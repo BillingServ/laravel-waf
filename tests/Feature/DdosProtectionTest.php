@@ -23,6 +23,64 @@ final class DdosProtectionTest extends TestCase
             ->name('global-limited');
     }
 
+    public function test_burst_limit_blocks_a_flood_inside_the_short_window(): void
+    {
+        config()->set('laravel-waf.ddos.burst', [
+            'enabled' => true,
+            'max_attempts' => 2,
+            'decay_seconds' => 5,
+        ]);
+        config()->set('laravel-waf.ddos.routes', ['*' => ['max_attempts' => 100, 'decay_seconds' => 60]]);
+
+        $server = ['REMOTE_ADDR' => '203.0.113.120'];
+        $this->withServerVariables($server)->get('/limited')->assertOk();
+        $this->withServerVariables($server)->get('/limited')->assertOk();
+
+        $this->withServerVariables($server)
+            ->get('/limited')
+            ->assertStatus(429)
+            ->assertHeader('Retry-After');
+    }
+
+    public function test_burst_limit_can_be_disabled(): void
+    {
+        config()->set('laravel-waf.ddos.burst.enabled', false);
+        config()->set('laravel-waf.ddos.burst.max_attempts', 1);
+
+        $server = ['REMOTE_ADDR' => '203.0.113.121'];
+        $this->withServerVariables($server)->get('/limited')->assertOk();
+        $this->withServerVariables($server)->get('/limited')->assertOk();
+    }
+
+    public function test_rejecting_bucket_reports_its_own_limit_header(): void
+    {
+        // The global bucket rejects first; its quota must be the one exposed.
+        config()->set('laravel-waf.ddos.global', ['max_attempts' => 1, 'decay_seconds' => 60]);
+        config()->set('laravel-waf.ddos.routes', ['*' => ['max_attempts' => 100, 'decay_seconds' => 60]]);
+
+        $server = ['REMOTE_ADDR' => '203.0.113.122'];
+        $this->withServerVariables($server)->get('/limited')->assertOk();
+
+        $this->withServerVariables($server)
+            ->get('/limited')
+            ->assertStatus(429)
+            ->assertHeader('X-RateLimit-Limit', '1')
+            ->assertHeader('X-RateLimit-Remaining', '0');
+    }
+
+    public function test_a_stale_counter_does_not_extend_the_lockout_window(): void
+    {
+        // A cache can retain the counter after its timer entry expired; the
+        // limiter must reset it instead of rejecting and starting a fresh
+        // lockout window from the stale count.
+        $key = \BillingServ\LaravelWaf\Support\RateLimitKey::for('route', '203.0.113.123', 'limited');
+        cache()->store()->put($key, 999, 3600);
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.123'])
+            ->get('/limited')
+            ->assertOk();
+    }
+
     public function test_route_limit_returns_too_many_requests(): void
     {
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.10'])

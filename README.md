@@ -116,6 +116,18 @@ when the Laravel WAF sends a valid signed decision.
 Laravel cannot protect a server after its network link or host resources have
 already been saturated by a volumetric attack.
 
+### Client IP and trusted proxies
+
+Every rate limit, behavior threshold, block decision, and challenge pass token
+is keyed by the client IP reported by Laravel (`$request->ip()`). Behind Nginx
+or a load balancer you must configure Laravel's `TrustProxies` middleware (or
+`TrustProxies`/`TRUSTED_PROXIES` on Laravel 11+) with your proxy addresses.
+Without it, Laravel sees the proxy IP instead of the client; worse, if the
+application trusts `X-Forwarded-For` from untrusted sources, an attacker can
+spoof a fresh identity per request and bypass every per-IP control in this
+package. IPv6 clients are grouped by /64 prefix for flood counters so that
+rotating addresses within one allocated block cannot evade rate limits.
+
 ## Prometheus
 
 LWAFD owns one Prometheus registry containing Laravel and agent metrics; no PHP

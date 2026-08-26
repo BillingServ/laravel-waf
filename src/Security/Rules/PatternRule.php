@@ -4,13 +4,15 @@ namespace BillingServ\LaravelWaf\Security\Rules;
 
 use BillingServ\LaravelWaf\Contracts\InspectionRule;
 use BillingServ\LaravelWaf\Security\Finding;
-use BillingServ\LaravelWaf\Security\InputNormalizer;
 use BillingServ\LaravelWaf\Security\RequestInputCollector;
 use BillingServ\LaravelWaf\Support\RequestContext;
 use Illuminate\Http\Request;
 
 abstract class PatternRule implements InspectionRule
 {
+    /** @var array<int, string>|null */
+    private ?array $exclusionExpressions = null;
+
     public function __construct(
         protected readonly RequestInputCollector $inputs,
         protected readonly array $configuration = [],
@@ -19,14 +21,16 @@ abstract class PatternRule implements InspectionRule
 
     public function inspect(Request $request): ?Finding
     {
+        // Patterns and exclusions are resolved once per request, not once per
+        // input value; the collector already normalized every value.
+        $patterns = $this->patterns();
         foreach ($this->inputs->collect($request) as $input) {
             if ($this->excluded($input->field)) {
                 continue;
             }
 
-            $value = InputNormalizer::normalize($input->value);
-            foreach ($this->patterns() as $pattern) {
-                if ($this->matches($pattern['pattern'], $value, $input->field)) {
+            foreach ($patterns as $pattern) {
+                if ($this->matches($pattern['pattern'], $input->value, $input->field)) {
                     return new Finding(
                         $this->category(),
                         $pattern['id'],
@@ -61,19 +65,20 @@ abstract class PatternRule implements InspectionRule
 
     private function excluded(string $field): bool
     {
-        $excluded = $this->config('exclude_fields', []);
-        if (!is_array($excluded)) {
-            return false;
+        if ($this->exclusionExpressions === null) {
+            $this->exclusionExpressions = [];
+
+            foreach ((array) $this->config('exclude_fields', []) as $pattern) {
+                if (is_string($pattern) && $pattern !== '') {
+                    $quoted = str_replace('\\*', '.*', preg_quote(strtolower($pattern), '~'));
+                    $this->exclusionExpressions[] = '~^'.$quoted.'$~i';
+                }
+            }
         }
 
-        foreach ($excluded as $pattern) {
-            if (!is_string($pattern) || $pattern === '') {
-                continue;
-            }
-
-            $quoted = preg_quote(strtolower($pattern), '~');
-            $quoted = str_replace('\\*', '.*', $quoted);
-            if (preg_match('~^'.$quoted.'$~i', $field) === 1) {
+        $field = strtolower($field);
+        foreach ($this->exclusionExpressions as $expression) {
+            if (preg_match($expression, $field) === 1) {
                 return true;
             }
         }

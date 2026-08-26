@@ -43,11 +43,17 @@ return [
         'mode' => env('LARAVEL_WAF_DDOS_MODE', $balanced ? 'challenge' : 'reject'), // reject|challenge
         'status' => 429,
         'fail_mode' => env('LARAVEL_WAF_DDOS_FAIL_MODE', 'open'), // open|closed
-        'exempt_routes' => [
-            'laravel-waf.challenge.verify',
-            'laravel-waf.blocked',
-        ],
+        // The challenge verify and blocked routes are always exempt internally.
+        'exempt_routes' => [],
         'include_headers' => true,
+
+        // Short-window flood detection. Trips seconds before the minute-long
+        // windows above and also applies to browsers that passed a challenge.
+        'burst' => [
+            'enabled' => env('LARAVEL_WAF_BURST_ENABLED', true),
+            'max_attempts' => (int) env('LARAVEL_WAF_BURST_MAX_ATTEMPTS', 30),
+            'decay_seconds' => (int) env('LARAVEL_WAF_BURST_DECAY_SECONDS', 5),
+        ],
 
         // Optional site-wide traffic pressure mode. Once the shared request
         // count crosses this threshold, unverified browsers receive the
@@ -65,15 +71,14 @@ return [
         'status' => (int) env('LARAVEL_WAF_RULES_STATUS', 403),
         'fail_mode' => env('LARAVEL_WAF_RULES_FAIL_MODE', 'open'), // open|closed
         'max_findings' => (int) env('LARAVEL_WAF_RULES_MAX_FINDINGS', 3),
-        'skip_routes' => [
-            'laravel-waf.challenge.verify',
-            'laravel-waf.blocked',
-        ],
+        // Challenge verify and blocked routes are always skipped internally.
+        'skip_routes' => [],
         'input' => [
             'path' => true,
             'query' => true,
             'body' => true,
             'route' => true,
+            'files' => true, // inspects client-supplied upload file names
             'headers' => false,
             'cookies' => false,
             'max_total_bytes' => (int) env('LARAVEL_WAF_RULES_MAX_INPUT_BYTES', 65536),

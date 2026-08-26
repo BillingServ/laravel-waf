@@ -154,6 +154,17 @@ final class WafRulesTest extends TestCase
             ->assertStatus(403);
     }
 
+    public function test_sql_server_variable_probes_are_blocked(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.65'])
+            ->get('/inspect?q=select%20%40%40version')
+            ->assertStatus(403);
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.65'])
+            ->get('/inspect?q=%40%40datadir')
+            ->assertStatus(403);
+    }
+
     public function test_livewire_sql_injection_redirects_to_the_top_level_blocked_page(): void
     {
         config()->set('laravel-waf.agent.enabled', true);
@@ -224,6 +235,115 @@ final class WafRulesTest extends TestCase
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.43'])
             ->get('/inspect?file=..%2F..%2Fetc%2Fpasswd')
             ->assertStatus(403);
+    }
+
+    public function test_uploaded_file_names_are_inspected(): void
+    {
+        // Browsers control the raw client name; simulate a traversal payload.
+        $file = \Illuminate\Http\UploadedFile::fake()->createWithContent('shell.php', 'x');
+        $originalName = new \ReflectionProperty(
+            \Symfony\Component\HttpFoundation\File\UploadedFile::class,
+            'originalName',
+        );
+        $originalName->setAccessible(true);
+        $originalName->setValue($file, '../../../shell.php');
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.61'])
+            ->post('/inspect', ['upload' => $file])
+            ->assertStatus(403);
+    }
+
+    public function test_every_uploaded_file_name_in_a_multipart_request_is_inspected(): void
+    {
+        $benign = \Illuminate\Http\UploadedFile::fake()->createWithContent('report.pdf', 'x');
+        $malicious = \Illuminate\Http\UploadedFile::fake()->createWithContent('shell.php', 'x');
+        $originalName = new \ReflectionProperty(
+            \Symfony\Component\HttpFoundation\File\UploadedFile::class,
+            'originalName',
+        );
+        $originalName->setAccessible(true);
+        $originalName->setValue($malicious, '../../../shell.php');
+
+        // The malicious name arrives first and must not be overwritten by
+        // the benign upload that follows it.
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.63'])
+            ->post('/inspect', ['uploads' => [$malicious, $benign]])
+            ->assertStatus(403);
+    }
+
+    public function test_traversal_in_the_client_relative_upload_path_is_inspected(): void
+    {
+        // Real browsers send "C:\..\..\shell.php" or "../../shell.php";
+        // Symfony strips the directory from getClientOriginalName() and keeps
+        // it in getClientOriginalPath(), which must be inspected too.
+        $temp = tempnam(sys_get_temp_dir(), 'laravel-waf-test');
+        self::assertIsString($temp);
+        $file = new class($temp, 'shell.php', null, UPLOAD_ERR_OK, true) extends \Illuminate\Http\UploadedFile {
+            public function getClientOriginalName(): string
+            {
+                return 'shell.php';
+            }
+
+            public function getClientOriginalPath(): string
+            {
+                return '../../../shell.php';
+            }
+        };
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.66'])
+            ->post('/inspect', ['upload' => $file])
+            ->assertStatus(403);
+    }
+
+    public function test_uploads_beyond_the_configured_depth_cap_are_ignored(): void
+    {
+        config()->set('laravel-waf.rules.input.max_depth', 2);
+
+        $temp = tempnam(sys_get_temp_dir(), 'laravel-waf-test');
+        self::assertIsString($temp);
+        $file = new class($temp, 'shell.php', null, UPLOAD_ERR_OK, true) extends \Illuminate\Http\UploadedFile {
+            public function getClientOriginalName(): string
+            {
+                return 'shell.php';
+            }
+
+            public function getClientOriginalPath(): string
+            {
+                return '../../../shell.php';
+            }
+        };
+
+        // Four levels deep: the walker must stop before reaching the payload.
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.67'])
+            ->post('/inspect', ['a' => ['b' => ['c' => ['d' => $file]]]])
+            ->assertOk()
+            ->assertContent('ok');
+
+        // The same payload one level deep stays inside the bound and is caught.
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.68'])
+            ->post('/inspect', ['shallow' => $file])
+            ->assertStatus(403);
+    }
+
+    public function test_doubly_encoded_ssrf_targets_are_blocked(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.64'])
+            ->get('/inspect?url=http%253A%252F%252F127.0.0.1%252Fadmin')
+            ->assertStatus(403);
+
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.64'])
+            ->get('/inspect?url=http%3A%2F%2F169.254.169.254%2Fmeta')
+            ->assertStatus(403);
+    }
+
+    public function test_benign_uploaded_file_names_pass(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.62'])
+            ->post('/inspect', [
+                'upload' => \Illuminate\Http\UploadedFile::fake()->createWithContent('report-2026.pdf', 'x'),
+            ])
+            ->assertOk()
+            ->assertContent('ok');
     }
 
     public function test_sensitive_dotfile_paths_are_blocked(): void

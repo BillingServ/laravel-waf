@@ -90,30 +90,40 @@ final class DdosProtection
         $violation = null;
         $remaining = PHP_INT_MAX;
         $limit = PHP_INT_MAX;
+        $includeHeaders = config('laravel-waf.ddos.include_headers', true);
 
         try {
             foreach ($rules as $rule) {
                 $key = RateLimitKey::for($rule['scope'], $ip, $rule['scope'] === 'route' ? $route : '');
 
+                // tooManyAttempts keeps Laravel's timer-aware expiry reset:
+                // a counter that outlived its timer entry starts a fresh
+                // window instead of locking out on a stale count.
                 if ($this->limiter->tooManyAttempts($key, $rule['max_attempts'])) {
                     $violation = [
                         'scope' => $rule['scope'],
                         'retry_after' => max(1, $this->limiter->availableIn($key)),
                     ];
-                    $remaining = 0;
+                    // The rejecting bucket's own quota is the one clients see;
+                    // min() would advertise a smaller non-rejecting window.
                     $limit = $rule['max_attempts'];
 
                     break;
                 }
 
-                $remaining = min($remaining, $this->limiter->remaining($key, $rule['max_attempts']));
+                $attempts = $this->limiter->hit($key, $rule['decay_seconds']);
+
+                if ($includeHeaders) {
+                    $remaining = min($remaining, max(0, $rule['max_attempts'] - $attempts));
+                }
+
                 $limit = min($limit, $rule['max_attempts']);
             }
         } catch (Throwable) {
             $this->metrics->error('rate_limiter');
 
             if (config('laravel-waf.ddos.fail_mode', 'open') === 'closed') {
-                return $this->protectionUnavailable();
+                return $this->finish($this->protectionUnavailable(), $startedAt);
             }
 
             return $this->finish($next($request), $startedAt);
@@ -150,24 +160,11 @@ final class DdosProtection
             );
         }
 
-        try {
-            foreach ($rules as $rule) {
-                $key = RateLimitKey::for($rule['scope'], $ip, $rule['scope'] === 'route' ? $route : '');
-                $this->limiter->hit($key, $rule['decay_seconds']);
-            }
-        } catch (Throwable) {
-            $this->metrics->error('rate_limiter');
-
-            if (config('laravel-waf.ddos.fail_mode', 'open') === 'closed') {
-                return $this->protectionUnavailable();
-            }
-        }
-
         $response = $next($request);
 
-        if (config('laravel-waf.ddos.include_headers', true) && $limit !== PHP_INT_MAX) {
+        if ($includeHeaders && $limit !== PHP_INT_MAX) {
             $response->headers->set('X-RateLimit-Limit', (string) $limit);
-            $response->headers->set('X-RateLimit-Remaining', (string) max(0, $remaining - 1));
+            $response->headers->set('X-RateLimit-Remaining', (string) $remaining);
         }
 
         return $this->finish($response, $startedAt);
@@ -198,6 +195,20 @@ final class DdosProtection
                     'scope' => $scope,
                     'max_attempts' => $maxAttempts,
                     'decay_seconds' => $decaySeconds,
+                ];
+            }
+        }
+
+        // The short burst window catches floods seconds before the minute
+        // windows trip, and applies to verified browsers too.
+        if (config('laravel-waf.ddos.burst.enabled', true)) {
+            $maxAttempts = (int) config('laravel-waf.ddos.burst.max_attempts', 30);
+            $decaySeconds = (int) config('laravel-waf.ddos.burst.decay_seconds', 5);
+            if ($maxAttempts > 0 && $decaySeconds > 0) {
+                $rules[] = [
+                    'scope' => 'burst',
+                    'max_attempts' => $maxAttempts,
+                    'decay_seconds' => max(1, min(60, $decaySeconds)),
                 ];
             }
         }

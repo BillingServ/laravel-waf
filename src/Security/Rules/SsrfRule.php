@@ -25,21 +25,25 @@ final class SsrfRule extends PatternRule
             return true;
         }
 
-        $normalized = InputNormalizer::normalize($value);
+        // The collector decodes once; scheme/host parsing needs a second
+        // pass to see through doubly encoded targets like http%3a%2f%2f...
+        $decoded = InputNormalizer::normalize($value);
         $fields = $this->config('url_fields', []);
         $isUrlField = $this->fieldMatches($field, is_array($fields) ? $fields : []);
-        $hasScheme = preg_match('~^[A-Za-z][A-Za-z0-9+.-]*://|^//~', $normalized) === 1;
+        $hasScheme = preg_match('~^[A-Za-z][A-Za-z0-9+.-]*://|^//~', $decoded) === 1;
         if (!$isUrlField && !$hasScheme) {
             return false;
         }
 
-        $parts = UrlSafety::parse($normalized, $isUrlField);
+        $parts = UrlSafety::parse($decoded, $isUrlField);
         if ($parts === null) {
             return $isUrlField;
         }
 
-        $allowed = UrlSafety::isAllowedHost($parts['host'], $this->config('allowed_hosts', []));
-        if ($allowed) {
+        $allowedHosts = $this->config('allowed_hosts', []);
+        $allowedHosts = is_array($allowedHosts) ? $allowedHosts : [];
+
+        if ($allowedHosts !== [] && UrlSafety::isAllowedHost($parts['host'], $allowedHosts)) {
             return false;
         }
 
@@ -47,9 +51,8 @@ final class SsrfRule extends PatternRule
             return true;
         }
 
-        $allowedHosts = $this->config('allowed_hosts', []);
-
-        return is_array($allowedHosts) && $allowedHosts !== [];
+        // An explicit allow list means every other host is untrusted.
+        return $allowedHosts !== [];
     }
 
     /** @param array<int, mixed> $fields */

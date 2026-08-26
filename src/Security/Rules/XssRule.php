@@ -17,6 +17,8 @@ final class XssRule extends PatternRule
             ['id' => 'javascript_scheme', 'pattern' => '~(?:java|vb)script\s*:~iu'],
             ['id' => 'html_data_scheme', 'pattern' => '~data\s*:\s*text/html~iu'],
             ['id' => 'dangerous_element', 'pattern' => '~<\s*/?\s*(?:iframe|object|embed|svg|style|base)\b~iu'],
+            ['id' => 'js_execution', 'pattern' => '~\beval\s*\(|document\.cookie\b|string\.fromcharcode\b~iu'],
+            ['id' => 'iframe_srcdoc', 'pattern' => '~\bsrcdoc\s*=~iu'],
         ];
     }
 }

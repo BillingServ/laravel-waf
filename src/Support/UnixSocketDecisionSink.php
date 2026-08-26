@@ -39,6 +39,9 @@ final class UnixSocketDecisionSink implements DecisionSink
 
         try {
             $timeout = max(0.001, $this->timeoutMilliseconds / 1000);
+            // One decision per connection: the Go agent closes the socket
+            // after answering a single line, so persistent pooling would
+            // reuse dead streams and drop block decisions.
             $client = @stream_socket_client(
                 'unix://'.$this->socket,
                 $errorNumber,

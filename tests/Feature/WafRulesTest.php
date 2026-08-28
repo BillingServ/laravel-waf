@@ -427,6 +427,36 @@ final class WafRulesTest extends TestCase
         self::assertNotNull($finding);
     }
 
+    public function test_crlf_rule_allows_a_legitimate_trailing_newline_in_a_public_key(): void
+    {
+        $request = Request::create('/inspect', 'POST', [
+            'public_key' => "ssh-ed25519 AAAA customer\n",
+        ]);
+        $finding = (new CrLfRule(new RequestInputCollector()))->inspect($request);
+
+        self::assertNull($finding);
+    }
+
+    public function test_waf_allows_a_legitimate_trailing_newline_in_a_public_key(): void
+    {
+        $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.69'])
+            ->post('/inspect', [
+                'public_key' => "ssh-ed25519 AAAA customer\n",
+            ])
+            ->assertOk()
+            ->assertContent('ok');
+    }
+
+    public function test_crlf_rule_blocks_header_termination_without_a_header_name(): void
+    {
+        $request = Request::create('/inspect', 'POST', [
+            'next' => "safe\r\n\r\nbody",
+        ]);
+        $finding = (new CrLfRule(new RequestInputCollector()))->inspect($request);
+
+        self::assertNotNull($finding);
+    }
+
     public function test_ssrf_to_a_loopback_address_is_blocked(): void
     {
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.54'])

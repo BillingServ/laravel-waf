@@ -12,7 +12,7 @@ final class CrLfRule extends PatternRule
     protected function patterns(): array
     {
         return [
-            ['id' => 'header_line_break', 'pattern' => '~[\r\n]~u'],
+            ['id' => 'header_line_break', 'pattern' => "/(?:\r\n|\r|\n)(?:[ \t]*(?:[!#\$%&'*+\-.^_`|~0-9A-Za-z]+[ \t]*:|(?:\r\n|\r|\n)))/u"],
         ];
     }
 }

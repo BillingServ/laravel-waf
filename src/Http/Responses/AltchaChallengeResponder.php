@@ -12,6 +12,8 @@ use Throwable;
 
 final class AltchaChallengeResponder implements ChallengeResponder
 {
+    private const MAX_GENERATED_CHALLENGE_URL_LENGTH = 8192;
+
     public function __construct(
         private readonly string $title,
         private readonly string $message,
@@ -37,15 +39,37 @@ final class AltchaChallengeResponder implements ChallengeResponder
 
         $field = $this->field();
         $challengeUrl = $this->safeUrl(config('laravel-waf.challenge.altcha.challenge_url'));
-        $returnTo = in_array(strtoupper($request->getMethod()), ['GET', 'HEAD'], true)
-            ? ($request->attributes->get('laravel-waf.challenge_return_to') ?: $request->getRequestUri())
-            : '/';
+        $returnTo = $this->returnTo($request);
+        $ip = $request->ip() ?: 'unknown';
+        $tokenTtl = (int) config('laravel-waf.challenge.request_token_ttl_seconds', 600);
         $token = $this->tokens->issueRequest(
-            $request->ip() ?: 'unknown',
+            $ip,
             $returnTo,
-            (int) config('laravel-waf.challenge.request_token_ttl_seconds', 600),
+            $tokenTtl,
         );
+        if ($token === null && $returnTo !== '/') {
+            $token = $this->tokens->issueRequest($ip, '/', $tokenTtl);
+        }
         $verifyUrl = $this->verifyUrl();
+
+        if ($token === null || $verifyUrl === null) {
+            return $this->unavailable($request, $headers);
+        }
+
+        $livewireRequest = $request->hasHeader('X-Livewire');
+        if ($challengeUrl === null && ($livewireRequest || !$request->expectsJson())) {
+            return $this->unavailable($request, $headers);
+        }
+
+        if ($livewireRequest) {
+            $challengePageUrl = $this->challengePageUrl($token);
+            if ($challengePageUrl !== null) {
+                $livewire = LivewireResponse::challenge($request, $challengePageUrl, $headers);
+                if ($livewire !== null) {
+                    return $livewire;
+                }
+            }
+        }
 
         if ($request->expectsJson()) {
             return new JsonResponse([
@@ -59,8 +83,8 @@ final class AltchaChallengeResponder implements ChallengeResponder
             ], $this->status, $headers);
         }
 
-        if ($challengeUrl === null || $token === null || $verifyUrl === null) {
-            return $this->unavailable($headers);
+        if ($challengeUrl === null) {
+            return $this->unavailable($request, $headers);
         }
 
         $widget = $this->widget($challengeUrl, $field);
@@ -240,9 +264,104 @@ final class AltchaChallengeResponder implements ChallengeResponder
         }
     }
 
-    private function safeUrl(mixed $url): ?string
+    private function challengePageUrl(string $token): ?string
     {
-        if (!is_string($url) || $url === '' || strlen($url) > 2048 || str_contains($url, "\r") || str_contains($url, "\n")) {
+        try {
+            // The signed token can contain an accepted return path of up to
+            // 2048 bytes. Base64 encoding legitimately makes the internal
+            // challenge URL longer than the cap used for configured URLs.
+            return $this->safeUrl(
+                route('laravel-waf.challenge.page', ['_waf_challenge' => $token]),
+                self::MAX_GENERATED_CHALLENGE_URL_LENGTH,
+            );
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function returnTo(Request $request): string
+    {
+        $attribute = $request->attributes->get('laravel-waf.challenge_return_to');
+        if (is_string($attribute) && $this->localUrl($attribute) !== null) {
+            return $attribute;
+        }
+
+        if (in_array(strtoupper($request->getMethod()), ['GET', 'HEAD'], true)) {
+            return $this->localUrl($request->getRequestUri()) ?? '/';
+        }
+
+        // State-changing requests cannot be replayed safely after a browser
+        // check. Return to the page containing the form instead of sending a
+        // challenged login request to an unrelated home page.
+        $referer = $request->headers->get('referer');
+        if (is_string($referer)) {
+            $localReferer = $this->sameOriginPath($request, $referer);
+            if ($localReferer !== null) {
+                return $localReferer;
+            }
+        }
+
+        return '/';
+    }
+
+    private function localUrl(?string $url): ?string
+    {
+        if (!is_string($url)
+            || $url === ''
+            || strlen($url) > 2048
+            || str_contains($url, "\r")
+            || str_contains($url, "\n")
+            || str_contains($url, '\\')
+            || !str_starts_with($url, '/')
+            || str_starts_with($url, '//')) {
+            return null;
+        }
+
+        return $url;
+    }
+
+    private function sameOriginPath(Request $request, string $referer): ?string
+    {
+        if ($this->localUrl($referer) !== null) {
+            return $referer;
+        }
+
+        $parts = parse_url($referer);
+        if (!is_array($parts)
+            || !isset($parts['scheme'], $parts['host'])
+            || strcasecmp((string) $parts['scheme'], $request->getScheme()) !== 0
+            || strcasecmp((string) $parts['host'], $request->getHost()) !== 0
+            || isset($parts['user'], $parts['pass'])) {
+            return null;
+        }
+
+        $scheme = strtolower((string) $parts['scheme']);
+        $refererPort = isset($parts['port'])
+            ? (int) $parts['port']
+            : ($scheme === 'https' ? 443 : 80);
+        $requestPort = $request->getPort();
+        $requestPort = is_numeric($requestPort)
+            ? (int) $requestPort
+            : ($request->isSecure() ? 443 : 80);
+        if ($refererPort !== $requestPort) {
+            return null;
+        }
+
+        $path = (string) ($parts['path'] ?? '/');
+        if ($path === '' || !str_starts_with($path, '/') || str_starts_with($path, '//')) {
+            $path = '/';
+        }
+
+        $query = isset($parts['query']) && $parts['query'] !== ''
+            ? '?'.$parts['query']
+            : '';
+
+        return $this->localUrl($path.$query);
+    }
+
+    private function safeUrl(mixed $url, int $maxLength = 2048): ?string
+    {
+        if (!is_string($url) || $url === '' || strlen($url) > $maxLength || str_contains($url, "\r") || str_contains($url, "\n")) {
             return null;
         }
 
@@ -263,8 +382,14 @@ final class AltchaChallengeResponder implements ChallengeResponder
     }
 
     /** @param array<string, string> $headers */
-    private function unavailable(array $headers): Response
+    private function unavailable(Request $request, array $headers): Response
     {
+        if ($request->expectsJson() || $request->hasHeader('X-Livewire')) {
+            return new JsonResponse([
+                'message' => 'Challenge verification is temporarily unavailable.',
+            ], 503, $headers);
+        }
+
         $headers['Content-Type'] = 'text/html; charset=UTF-8';
 
         return new Response(

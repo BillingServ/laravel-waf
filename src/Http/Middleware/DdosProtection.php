@@ -13,6 +13,7 @@ use Closure;
 use Illuminate\Cache\RateLimiter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Router;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 
@@ -24,6 +25,7 @@ final class DdosProtection
         private readonly ChallengeResponder $challenge,
         private readonly ChallengeTokenManager $challengeTokens,
         private readonly MetricsRecorder $metrics,
+        private readonly Router $router,
     ) {
     }
 
@@ -68,7 +70,16 @@ final class DdosProtection
             return $this->finish($this->protectionUnavailable(), $startedAt);
         }
         if ($agentGateRetryAfter !== null) {
-            $this->metrics->decision('challenge', 'agent_gate', $route);
+            $loginProtected = $this->loginProtected($request);
+            $action = $loginProtected ? 'rate_limited' : 'challenge';
+            $this->metrics->decision($action, 'agent_gate', $route);
+
+            if ($action === 'rate_limited') {
+                return $this->finish(
+                    $this->rateLimitedResponse($request, $agentGateRetryAfter),
+                    $startedAt,
+                );
+            }
 
             return $this->finish(
                 $this->challenge->respond($request, $agentGateRetryAfter, 'agent_gate'),
@@ -78,7 +89,16 @@ final class DdosProtection
 
         $adaptiveRetryAfter = $this->adaptiveRetryAfter($challengePassed);
         if ($adaptiveRetryAfter !== null) {
-            $this->metrics->decision('challenge', 'adaptive', $route);
+            $loginProtected = $this->loginProtected($request);
+            $action = $loginProtected ? 'rate_limited' : 'challenge';
+            $this->metrics->decision($action, 'adaptive', $route);
+
+            if ($action === 'rate_limited') {
+                return $this->finish(
+                    $this->rateLimitedResponse($request, $adaptiveRetryAfter),
+                    $startedAt,
+                );
+            }
 
             return $this->finish(
                 $this->challenge->respond($request, $adaptiveRetryAfter, 'adaptive'),
@@ -131,9 +151,11 @@ final class DdosProtection
 
         if ($violation !== null) {
             $mode = config('laravel-waf.ddos.mode', 'reject');
-            $action = ! $challengePassed
+            $shouldChallenge = ! $challengePassed
                 && $mode === 'challenge'
-                && config('laravel-waf.challenge.enabled', false)
+                && config('laravel-waf.challenge.enabled', false);
+            $action = $shouldChallenge
+                && ! $this->loginProtected($request)
                 ? 'challenge'
                 : 'rate_limited';
 
@@ -242,6 +264,24 @@ final class DdosProtection
         }
     }
 
+    private function loginProtected(Request $request): bool
+    {
+        if (config('laravel-waf.ddos.mode', 'reject') !== 'challenge'
+            || !config('laravel-waf.challenge.enabled', false)
+            || !config('laravel-waf.login.enabled', true)
+            || $request->isMethodSafe()) {
+            return false;
+        }
+
+        // LoginProtection owns the login endpoint's IP and identifier limits,
+        // but the generic DDoS buckets still apply. Resolve route metadata
+        // only when this request would otherwise receive a browser challenge.
+        return RequestContext::hasMiddleware($request, [
+            'laravel-waf.login',
+            LoginProtection::class,
+        ], $this->router);
+    }
+
     private function agentGateRetryAfter(Request $request, bool $challengePassed): ?int
     {
         if ($challengePassed || !config('laravel-waf.agent.gate.enabled', false)) {
@@ -271,7 +311,7 @@ final class DdosProtection
         return max(1, min(3600, (int) config('laravel-waf.agent.gate.retry_after_seconds', 60)));
     }
 
-    private function rateLimitedResponse(Request $request, int $retryAfter, int $limit): Response
+    private function rateLimitedResponse(Request $request, int $retryAfter, ?int $limit = null): Response
     {
         $status = max(400, min(599, (int) config('laravel-waf.ddos.status', 429)));
         $headers = [
@@ -279,7 +319,7 @@ final class DdosProtection
             'Retry-After' => (string) max(1, $retryAfter),
         ];
 
-        if (config('laravel-waf.ddos.include_headers', true)) {
+        if ($limit !== null && config('laravel-waf.ddos.include_headers', true)) {
             $headers['X-RateLimit-Limit'] = (string) $limit;
             $headers['X-RateLimit-Remaining'] = '0';
         }

@@ -6,6 +6,8 @@ use JsonException;
 
 final class ChallengeTokenManager
 {
+    private const MAX_TOKEN_LENGTH = 4096;
+
     public function __construct(private readonly ?string $secret)
     {
     }
@@ -68,18 +70,23 @@ final class ChallengeTokenManager
                 'expires_at' => time() + max(1, min(86400, $ttlSeconds)),
                 'nonce' => bin2hex(random_bytes(16)),
             ]);
-            $encoded = $this->base64Url(json_encode($payload, JSON_THROW_ON_ERROR));
+            $encoded = $this->base64Url(json_encode(
+                $payload,
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR,
+            ));
         } catch (\Throwable) {
             return null;
         }
 
-        return $encoded.'.'.hash_hmac('sha256', $encoded, $this->secret);
+        $token = $encoded.'.'.hash_hmac('sha256', $encoded, $this->secret);
+
+        return strlen($token) <= self::MAX_TOKEN_LENGTH ? $token : null;
     }
 
     /** @return array<string, mixed>|null */
     private function read(?string $token): ?array
     {
-        if ($this->secret === null || $this->secret === '' || !is_string($token) || $token === '' || strlen($token) > 4096) {
+        if ($this->secret === null || $this->secret === '' || !is_string($token) || $token === '' || strlen($token) > self::MAX_TOKEN_LENGTH) {
             return null;
         }
 

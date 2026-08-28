@@ -99,13 +99,23 @@ installed ALTCHA library and PHP extensions support them.
    verification route.
 3. The WAF verifies the payload, rejects replayed tokens/payloads, and issues
    a short-lived signed challenge cookie.
-4. The browser is redirected to the original GET/HEAD URL.
+4. The browser is redirected to the original GET/HEAD URL, or to the same-origin
+   referring form page when the challenged request changed state.
 5. The challenge cookie receives a separate bounded rate limit; it is not an
    unlimited bypass.
 
 The internal verification route is exempt from the ordinary request limiter,
 but it has its own per-IP verification limit. Keep it protected by the Nginx
 limits described in [`nginx-ddos.md`](nginx-ddos.md).
+
+Livewire update requests that are challenged receive a successful Livewire
+redirect to the dedicated challenge page at `/_waf/challenge`. This keeps the
+verification document out of the current component or modal. Because a
+state-changing request must not be replayed with credentials, verification
+returns to the page that sent the request. Keep `laravel-waf.login` attached to
+credential endpoints: generic DDoS limits still apply there, but an exhausted
+bucket returns a plain `429` instead of replacing the submitted credentials
+with a browser challenge.
 
 ## Custom integrations
 

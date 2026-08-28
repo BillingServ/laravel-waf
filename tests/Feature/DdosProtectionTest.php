@@ -7,17 +7,56 @@ use BillingServ\LaravelWaf\Contracts\DecisionSink;
 use BillingServ\LaravelWaf\Http\Middleware\DdosProtection;
 use BillingServ\LaravelWaf\Http\Middleware\WafProtection;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
+use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Tests\TestCase;
+use Illuminate\Cache\RateLimiter;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
+use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\Route;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class DdosProtectionTest extends TestCase
 {
     protected function defineRoutes($router): void
     {
+        $router->middlewareGroup('waf-login-group', ['laravel-waf.login']);
+
         Route::middleware(DdosProtection::class)
             ->get('/limited', static fn () => response('ok'))
             ->name('limited');
+
+        Route::middleware(DdosProtection::class)
+            ->post('/livewire/update', static fn () => response()->json(['ok' => true]))
+            ->name('livewire.update');
+
+        Route::middleware([DdosProtection::class, 'laravel-waf.login'])
+            ->post('/protected-login', static fn () => response('logged-in'))
+            ->name('protected-login');
+
+        Route::middleware([DdosProtection::class, 'waf-login-group'])
+            ->post('/group-protected-login', static fn () => response('logged-in'))
+            ->name('group-protected-login');
+
+        Route::middleware([DdosProtection::class, 'waf-login-group'])
+            ->get('/group-protected-login', static fn () => response('login-form'))
+            ->name('group-protected-login.form');
+
+        Route::middleware([DdosProtection::class, 'waf-login-group'])
+            ->withoutMiddleware('laravel-waf.login')
+            ->post('/group-excluded-login', static fn () => response('logged-in'))
+            ->name('group-excluded-login');
+
+        Route::middleware('laravel-waf.login')
+            ->post('/global-protected-login', static fn () => response('logged-in'))
+            ->name('global-protected-login');
+
+        Route::middleware('laravel-waf.login')
+            ->post('/global-controller-login', [DdosControllerConstructionProbe::class, 'store'])
+            ->name('global-controller-login');
+
+        Route::middleware('laravel-waf.login')
+            ->post('/global-routing-cost/{account}', static fn () => response('logged-in'))
+            ->name('global-routing-cost');
 
         Route::get('/global-limited', static fn () => response('ok'))
             ->name('global-limited');
@@ -225,6 +264,492 @@ final class DdosProtectionTest extends TestCase
             ->assertStatus(429)
             ->assertHeader('X-Laravel-Waf-Challenge', 'required')
             ->assertSee('Additional verification required');
+    }
+
+    public function test_login_protection_prevents_generic_ddos_challenges_on_login_submissions(): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+
+        $server = ['REMOTE_ADDR' => '203.0.113.23'];
+        $this->withServerVariables($server)
+            ->post('/protected-login', ['email' => 'user@example.test'])
+            ->assertOk();
+        $this->withServerVariables($server)
+            ->post('/protected-login', ['email' => 'user@example.test'])
+            ->assertOk();
+        $this->withServerVariables($server)
+            ->post('/protected-login', ['email' => 'user@example.test'])
+            ->assertStatus(429)
+            ->assertHeader('Retry-After')
+            ->assertDontSee('Checking your browser');
+    }
+
+    #[DataProvider('disabledLoginProtectionChallengeCases')]
+    public function test_disabled_login_protection_does_not_suppress_ddos_challenges(string $source, string $ip): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.login.enabled', false);
+        $server = ['REMOTE_ADDR' => $ip];
+
+        if ($source === 'adaptive') {
+            config()->set('laravel-waf.ddos.adaptive.enabled', true);
+            config()->set('laravel-waf.ddos.adaptive.challenge_after', 1);
+            config()->set('laravel-waf.ddos.adaptive.window_seconds', 60);
+            $this->withServerVariables($server)->post('/protected-login')->assertOk();
+        } elseif ($source === 'agent_gate') {
+            config()->set('laravel-waf.agent.gate.enabled', true);
+            config()->set('laravel-waf.agent.gate.token', str_repeat('g', 32));
+        } else {
+            $this->withServerVariables($server)->post('/protected-login')->assertOk();
+            $this->withServerVariables($server)->post('/protected-login')->assertOk();
+        }
+
+        $request = $this->withServerVariables($server);
+        if ($source === 'agent_gate') {
+            $request = $request->withHeader('X-Laravel-Waf-Gate', str_repeat('g', 32));
+        }
+
+        $request->post('/protected-login')
+            ->assertStatus(429)
+            ->assertHeader('X-Laravel-Waf-Challenge', 'required');
+    }
+
+    public static function disabledLoginProtectionChallengeCases(): array
+    {
+        return [
+            'generic bucket' => ['generic', '203.0.113.40'],
+            'adaptive pressure' => ['adaptive', '203.0.113.41'],
+            'agent gate' => ['agent_gate', '203.0.113.42'],
+        ];
+    }
+
+    public function test_login_protection_in_a_middleware_group_prevents_generic_ddos_challenges(): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+
+        $server = ['REMOTE_ADDR' => '203.0.113.24'];
+        $this->withServerVariables($server)->post('/group-protected-login')->assertOk();
+        $this->withServerVariables($server)->post('/group-protected-login')->assertOk();
+
+        $this->withServerVariables($server)
+            ->post('/group-protected-login')
+            ->assertStatus(429)
+            ->assertHeader('Retry-After')
+            ->assertHeaderMissing('X-Laravel-Waf-Challenge')
+            ->assertDontSee('Checking your browser');
+    }
+
+    public function test_safe_login_form_route_in_a_middleware_group_can_receive_a_challenge(): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+
+        $server = ['REMOTE_ADDR' => '203.0.113.36'];
+        $this->withServerVariables($server)->get('/group-protected-login')->assertOk();
+        $this->withServerVariables($server)->get('/group-protected-login')->assertOk();
+
+        $this->withServerVariables($server)
+            ->get('/group-protected-login')
+            ->assertStatus(429)
+            ->assertHeader('X-Laravel-Waf-Challenge', 'required');
+    }
+
+    public function test_excluded_login_middleware_does_not_suppress_a_generic_ddos_challenge(): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.challenge.provider', 'altcha');
+        config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost/altcha/challenge');
+
+        $server = ['REMOTE_ADDR' => '203.0.113.25'];
+        $this->withServerVariables($server)->post('/group-excluded-login')->assertOk();
+        $this->withServerVariables($server)->post('/group-excluded-login')->assertOk();
+
+        $this->withServerVariables($server)
+            ->post('/group-excluded-login')
+            ->assertStatus(429)
+            ->assertHeader('X-Laravel-Waf-Challenge', 'required')
+            ->assertSee('Checking your browser');
+    }
+
+    public function test_global_waf_detects_login_protection_before_route_dispatch(): void
+    {
+        $this->app->make(HttpKernel::class)->pushMiddleware(WafProtection::class);
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+
+        $server = ['REMOTE_ADDR' => '203.0.113.26'];
+        $this->withServerVariables($server)->post('/global-protected-login')->assertOk();
+        $this->withServerVariables($server)->post('/global-protected-login')->assertOk();
+
+        $this->withServerVariables($server)
+            ->post('/global-protected-login')
+            ->assertStatus(429)
+            ->assertHeader('Retry-After')
+            ->assertHeaderMissing('X-Laravel-Waf-Challenge')
+            ->assertDontSee('Checking your browser');
+    }
+
+    public function test_global_waf_rejects_a_flood_without_constructing_the_route_controller(): void
+    {
+        $this->app->make(HttpKernel::class)->pushMiddleware(WafProtection::class);
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.ddos.global', ['max_attempts' => 1, 'decay_seconds' => 60]);
+        config()->set('laravel-waf.ddos.routes', ['*' => ['max_attempts' => 100, 'decay_seconds' => 60]]);
+
+        $ip = '203.0.113.28';
+        DdosControllerConstructionProbe::$constructions = 0;
+        $limiter = $this->app->make(RateLimiter::class);
+        $key = RateLimitKey::for('global', $ip);
+        $limiter->hit($key, 60);
+
+        $this->withServerVariables(['REMOTE_ADDR' => $ip])
+            ->post('/global-controller-login')
+            ->assertStatus(429)
+            ->assertHeaderMissing('X-Laravel-Waf-Challenge');
+
+        self::assertSame(0, DdosControllerConstructionProbe::$constructions);
+
+        $limiter->clear($key);
+        $this->withServerVariables(['REMOTE_ADDR' => $ip])
+            ->post('/global-controller-login')
+            ->assertOk();
+
+        self::assertSame(1, DdosControllerConstructionProbe::$constructions);
+    }
+
+    public function test_global_waf_does_not_match_the_route_early_in_reject_mode(): void
+    {
+        $this->app->make(HttpKernel::class)->pushMiddleware(WafProtection::class);
+        config()->set('laravel-waf.ddos.mode', 'reject');
+        config()->set('laravel-waf.ddos.global', ['max_attempts' => 1, 'decay_seconds' => 60]);
+        config()->set('laravel-waf.ddos.routes', ['*' => ['max_attempts' => 100, 'decay_seconds' => 60]]);
+
+        $ip = '203.0.113.29';
+        $route = Route::getRoutes()->getByName('global-routing-cost');
+        self::assertNotNull($route);
+        self::assertFalse($route->hasParameters());
+        $this->app->make(RateLimiter::class)->hit(RateLimitKey::for('global', $ip), 60);
+
+        $this->withServerVariables(['REMOTE_ADDR' => $ip])
+            ->post('/global-routing-cost/customer-1')
+            ->assertStatus(429);
+
+        self::assertFalse($route->hasParameters());
+    }
+
+    public function test_global_waf_does_not_match_the_route_early_when_challenges_are_disabled(): void
+    {
+        $this->app->make(HttpKernel::class)->pushMiddleware(WafProtection::class);
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.challenge.enabled', false);
+        config()->set('laravel-waf.ddos.global', ['max_attempts' => 1, 'decay_seconds' => 60]);
+        config()->set('laravel-waf.ddos.routes', ['*' => ['max_attempts' => 100, 'decay_seconds' => 60]]);
+
+        $ip = '203.0.113.30';
+        $route = Route::getRoutes()->getByName('global-routing-cost');
+        self::assertNotNull($route);
+        self::assertFalse($route->hasParameters());
+        $this->app->make(RateLimiter::class)->hit(RateLimitKey::for('global', $ip), 60);
+
+        $this->withServerVariables(['REMOTE_ADDR' => $ip])
+            ->post('/global-routing-cost/customer-2')
+            ->assertStatus(429);
+
+        self::assertFalse($route->hasParameters());
+    }
+
+    public function test_livewire_challenge_navigates_to_a_top_level_page_and_returns_to_the_form(): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.challenge.provider', 'altcha');
+        config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost/altcha/challenge');
+        $this->app->instance(ChallengeVerifier::class, new class implements ChallengeVerifier {
+            public function verify(mixed $payload): bool
+            {
+                return $payload === 'valid-payload';
+            }
+        });
+
+        $snapshot = json_encode([
+            'data' => [],
+            'memo' => ['id' => 'login-component', 'name' => 'login', 'children' => []],
+            'checksum' => 'test-checksum',
+        ], JSON_THROW_ON_ERROR);
+        $request = [
+            'components' => [[
+                'snapshot' => $snapshot,
+                'updates' => [],
+                'calls' => [],
+            ]],
+        ];
+        $server = ['REMOTE_ADDR' => '203.0.113.22'];
+        $headers = [
+            'X-Livewire' => 'true',
+            'Referer' => 'http://localhost/login',
+        ];
+
+        $this->withHeaders($headers)->withServerVariables($server)->postJson('/livewire/update', $request);
+        $this->withHeaders($headers)->withServerVariables($server)->postJson('/livewire/update', $request);
+
+        $response = $this->withHeaders($headers)
+            ->withServerVariables($server)
+            ->postJson('/livewire/update', $request);
+
+        $response->assertOk()->assertHeader('X-Laravel-Waf-Challenge', 'required');
+        $redirect = $response->json('components.0.effects.redirect');
+        self::assertIsString($redirect);
+        self::assertStringContainsString('/_waf/challenge?', $redirect);
+
+        $page = $this->get(parse_url($redirect, PHP_URL_PATH).'?'.parse_url($redirect, PHP_URL_QUERY));
+        $page->assertStatus(429)
+            ->assertSee('altcha-widget')
+            ->assertSee('Checking your browser');
+
+        preg_match('/name="_waf_challenge" value="([^"]+)"/', $page->getContent(), $matches);
+        self::assertNotEmpty($matches[1] ?? null);
+
+        $this->withServerVariables($server)
+            ->post('/_waf/challenge/verify', [
+                '_waf_challenge' => $matches[1],
+                'altcha' => 'valid-payload',
+            ])
+            ->assertRedirect('/login')
+            ->assertStatus(303);
+    }
+
+    #[DataProvider('referrerPortCases')]
+    public function test_livewire_return_url_requires_the_same_effective_port(string $referer, string $expectedReturnTo): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.challenge.provider', 'altcha');
+        config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost:8080/altcha/challenge');
+
+        $snapshot = json_encode([
+            'data' => [],
+            'memo' => ['id' => 'login-component', 'name' => 'login', 'children' => []],
+            'checksum' => 'test-checksum',
+        ], JSON_THROW_ON_ERROR);
+        $request = [
+            'components' => [[
+                'snapshot' => $snapshot,
+                'updates' => [],
+                'calls' => [],
+            ]],
+        ];
+        $ip = '203.0.113.37';
+        $server = [
+            'REMOTE_ADDR' => $ip,
+            'HTTP_HOST' => 'localhost:8080',
+            'SERVER_PORT' => '8080',
+        ];
+        $headers = [
+            'Host' => 'localhost:8080',
+            'X-Livewire' => 'true',
+            'Referer' => $referer,
+        ];
+        $requestUrl = 'http://localhost:8080/livewire/update';
+
+        $this->withHeaders($headers)->withServerVariables($server)->postJson($requestUrl, $request);
+        $this->withHeaders($headers)->withServerVariables($server)->postJson($requestUrl, $request);
+        $response = $this->withHeaders($headers)
+            ->withServerVariables($server)
+            ->postJson($requestUrl, $request);
+
+        $response->assertOk();
+        $redirect = $response->json('components.0.effects.redirect');
+        self::assertIsString($redirect);
+        parse_str((string) parse_url($redirect, PHP_URL_QUERY), $query);
+        self::assertIsString($query['_waf_challenge'] ?? null);
+        self::assertSame(
+            $expectedReturnTo,
+            $this->app->make(ChallengeTokenManager::class)->requestReturnTo($query['_waf_challenge'], $ip),
+        );
+    }
+
+    public static function referrerPortCases(): array
+    {
+        return [
+            'same non-default port' => ['http://localhost:8080/login?next=account', '/login?next=account'],
+            'different explicit port' => ['http://localhost:9090/login?next=account', '/'],
+            'implicit default port' => ['http://localhost/login?next=account', '/'],
+            'oversized encoded token' => ['http://localhost:8080/'.str_repeat('"', 2047), '/'],
+        ];
+    }
+
+    public function test_json_altcha_challenge_does_not_require_a_widget_url(): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.challenge.provider', 'altcha');
+        config()->set('laravel-waf.challenge.altcha.challenge_url', null);
+
+        $server = ['REMOTE_ADDR' => '203.0.113.31'];
+        $this->withServerVariables($server)->getJson('/limited')->assertOk();
+        $this->withServerVariables($server)->getJson('/limited')->assertOk();
+
+        $this->withServerVariables($server)
+            ->getJson('/limited')
+            ->assertStatus(429)
+            ->assertHeader('X-Laravel-Waf-Challenge', 'required')
+            ->assertJsonPath('challenge', true)
+            ->assertJsonPath('provider', 'altcha')
+            ->assertJsonPath('verification_url', 'http://localhost/_waf/challenge/verify')
+            ->assertJsonStructure(['challenge_token']);
+    }
+
+    public function test_html_altcha_challenge_still_requires_a_widget_url(): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.challenge.provider', 'altcha');
+        config()->set('laravel-waf.challenge.altcha.challenge_url', null);
+
+        $server = ['REMOTE_ADDR' => '203.0.113.32'];
+        $this->withServerVariables($server)->get('/limited')->assertOk();
+        $this->withServerVariables($server)->get('/limited')->assertOk();
+
+        $this->withServerVariables($server)
+            ->get('/limited')
+            ->assertStatus(503)
+            ->assertHeader('X-Laravel-Waf-Challenge', 'required')
+            ->assertSee('Verification temporarily unavailable');
+    }
+
+    public function test_json_altcha_unavailable_response_is_json_when_signing_is_unconfigured(): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.challenge.provider', 'altcha');
+        config()->set('laravel-waf.challenge.cookie_secret', null);
+        config()->set('app.key', null);
+
+        $server = ['REMOTE_ADDR' => '203.0.113.33'];
+        $this->withServerVariables($server)->getJson('/limited')->assertOk();
+        $this->withServerVariables($server)->getJson('/limited')->assertOk();
+
+        $this->withServerVariables($server)
+            ->getJson('/limited')
+            ->assertStatus(503)
+            ->assertHeader('Content-Type', 'application/json')
+            ->assertJsonPath('message', 'Challenge verification is temporarily unavailable.');
+    }
+
+    public function test_json_altcha_unavailable_response_is_json_when_verification_route_is_missing(): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.challenge.provider', 'altcha');
+        config()->set('laravel-waf.challenge.verify_route', 'missing-challenge-route');
+
+        $server = ['REMOTE_ADDR' => '203.0.113.34'];
+        $this->withServerVariables($server)->getJson('/limited')->assertOk();
+        $this->withServerVariables($server)->getJson('/limited')->assertOk();
+
+        $this->withServerVariables($server)
+            ->getJson('/limited')
+            ->assertStatus(503)
+            ->assertHeader('Content-Type', 'application/json')
+            ->assertJsonPath('message', 'Challenge verification is temporarily unavailable.');
+    }
+
+    #[DataProvider('livewireUnavailableCases')]
+    public function test_livewire_altcha_unavailable_response_is_json_with_a_wildcard_accept_header(array $configuration): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.challenge.provider', 'altcha');
+        foreach ($configuration as $key => $value) {
+            config()->set($key, $value);
+        }
+
+        $request = [
+            'components' => [[
+                'snapshot' => '{}',
+                'updates' => [],
+                'calls' => [],
+            ]],
+        ];
+        $server = ['REMOTE_ADDR' => '203.0.113.35'];
+        $headers = [
+            'Accept' => '*/*',
+            'X-Livewire' => 'true',
+        ];
+        $this->withServerVariables($server)->postJson('/livewire/update', $request, $headers)->assertOk();
+        $this->withServerVariables($server)->postJson('/livewire/update', $request, $headers)->assertOk();
+
+        $this->withServerVariables($server)
+            ->postJson('/livewire/update', $request, $headers)
+            ->assertStatus(503)
+            ->assertHeader('Content-Type', 'application/json')
+            ->assertJsonPath('message', 'Challenge verification is temporarily unavailable.');
+    }
+
+    public static function livewireUnavailableCases(): array
+    {
+        return [
+            'missing signing secret' => [[
+                'laravel-waf.challenge.cookie_secret' => null,
+                'app.key' => null,
+            ]],
+            'missing verification route' => [[
+                'laravel-waf.challenge.verify_route' => 'missing-challenge-route',
+            ]],
+            'missing widget URL' => [[
+                'laravel-waf.challenge.altcha.challenge_url' => null,
+            ]],
+        ];
+    }
+
+    public function test_livewire_challenge_accepts_a_long_signed_return_url(): void
+    {
+        config()->set('laravel-waf.ddos.mode', 'challenge');
+        config()->set('laravel-waf.challenge.provider', 'altcha');
+        config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost/altcha/challenge');
+        $this->app->instance(ChallengeVerifier::class, new class implements ChallengeVerifier {
+            public function verify(mixed $payload): bool
+            {
+                return $payload === 'valid-payload';
+            }
+        });
+
+        $snapshot = json_encode([
+            'data' => [],
+            'memo' => ['id' => 'login-component', 'name' => 'login', 'children' => []],
+            'checksum' => 'test-checksum',
+        ], JSON_THROW_ON_ERROR);
+        $request = [
+            'components' => [[
+                'snapshot' => $snapshot,
+                'updates' => [],
+                'calls' => [],
+            ]],
+        ];
+        $server = ['REMOTE_ADDR' => '203.0.113.27'];
+        $returnTo = str_repeat('/a', 999);
+        $headers = [
+            'X-Livewire' => 'true',
+            'Referer' => 'http://localhost'.$returnTo,
+        ];
+
+        $this->withHeaders($headers)->withServerVariables($server)->postJson('/livewire/update', $request);
+        $this->withHeaders($headers)->withServerVariables($server)->postJson('/livewire/update', $request);
+        $response = $this->withHeaders($headers)
+            ->withServerVariables($server)
+            ->postJson('/livewire/update', $request);
+
+        $response->assertOk()->assertHeader('X-Laravel-Waf-Challenge', 'required');
+        $redirect = $response->json('components.0.effects.redirect');
+        self::assertIsString($redirect);
+        self::assertGreaterThan(2048, strlen($redirect));
+        self::assertStringContainsString('/_waf/challenge?', $redirect);
+
+        $page = $this->withServerVariables($server)
+            ->get(parse_url($redirect, PHP_URL_PATH).'?'.parse_url($redirect, PHP_URL_QUERY));
+        $page->assertStatus(429)->assertSee('Checking your browser');
+
+        preg_match('/name="_waf_challenge" value="([^"]+)"/', $page->getContent(), $matches);
+        self::assertNotEmpty($matches[1] ?? null);
+
+        $this->withServerVariables($server)
+            ->post('/_waf/challenge/verify', [
+                '_waf_challenge' => $matches[1],
+                'altcha' => 'valid-payload',
+            ])
+            ->assertRedirect($returnTo)
+            ->assertStatus(303);
     }
 
     public function test_altcha_challenge_can_run_and_submit_automatically(): void
@@ -455,5 +980,20 @@ final class DdosProtectionTest extends TestCase
             'salt' => $challenge->salt,
             'signature' => $challenge->signature,
         ], JSON_THROW_ON_ERROR));
+    }
+}
+
+final class DdosControllerConstructionProbe extends Controller
+{
+    public static int $constructions = 0;
+
+    public function __construct()
+    {
+        self::$constructions++;
+    }
+
+    public function store()
+    {
+        return response('logged-in');
     }
 }

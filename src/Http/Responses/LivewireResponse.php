@@ -10,6 +10,52 @@ use Throwable;
 final class LivewireResponse
 {
     /**
+     * Return a successful Livewire response that navigates the browser to a
+     * top-level challenge page. Rendering the challenge HTML in the update
+     * response makes it appear inside the current component or modal.
+     */
+    public static function challenge(Request $request, string $url, array $headers = []): ?Response
+    {
+        if (!self::isUpdateRequest($request)) {
+            return null;
+        }
+
+        $components = $request->input('components');
+        if (is_array($components) && $components !== []) {
+            $responses = [];
+            foreach ($components as $component) {
+                if (!is_array($component) || !is_string($component['snapshot'] ?? null)) {
+                    return null;
+                }
+
+                $responses[] = [
+                    'snapshot' => $component['snapshot'],
+                    'effects' => ['redirect' => $url],
+                ];
+            }
+
+            return new JsonResponse([
+                'components' => $responses,
+                'assets' => [],
+            ], 200, $headers);
+        }
+
+        $serverMemo = $request->input('serverMemo');
+        if (!is_array($serverMemo)) {
+            return null;
+        }
+
+        return new JsonResponse([
+            'effects' => [
+                'html' => null,
+                'dirty' => [],
+                'redirect' => $url,
+            ],
+            'serverMemo' => $serverMemo,
+        ], 200, $headers);
+    }
+
+    /**
      * Return the Livewire response shape for a top-level blocked-page redirect.
      *
      * Livewire requires a successful JSON response for client-side redirects.

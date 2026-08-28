@@ -2,6 +2,7 @@
 
 namespace BillingServ\LaravelWaf\Http\Controllers;
 
+use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
 use BillingServ\LaravelWaf\Contracts\ChallengeVerifier;
 use BillingServ\LaravelWaf\Http\Responses\BlockedResponse;
 use BillingServ\LaravelWaf\Http\Responses\ChallengePage;
@@ -22,10 +23,32 @@ final class ChallengeController
     public function __construct(
         private readonly RateLimiter $limiter,
         private readonly Repository $cache,
+        private readonly ChallengeResponder $challenge,
         private readonly ChallengeVerifier $verifier,
         private readonly ChallengeTokenManager $tokens,
         private readonly MetricsRecorder $metrics,
     ) {
+    }
+
+    public function show(Request $request): Response
+    {
+        $ip = $request->ip() ?: 'unknown';
+        $token = $request->query('_waf_challenge');
+        $returnTo = is_string($token)
+            ? $this->tokens->requestReturnTo($token, $ip)
+            : null;
+
+        if ($returnTo === null) {
+            return $this->invalidPage();
+        }
+
+        // The page route is used when an AJAX/Livewire request needs to move
+        // the browser check to the top-level window. Keep the original safe
+        // destination in a request attribute so the responder can issue a
+        // fresh, form-postable challenge token for it.
+        $request->attributes->set('laravel-waf.challenge_return_to', $returnTo);
+
+        return $this->challenge->respond($request, 60, 'livewire');
     }
 
     public function verify(Request $request): Response
@@ -187,5 +210,20 @@ final class ChallengeController
         }
 
         return new Response('Challenge verification is temporarily unavailable.', 503, $headers);
+    }
+
+    private function invalidPage(): Response
+    {
+        return new Response(
+            ChallengePage::failed(
+                (string) config('laravel-waf.challenge.failure_title', 'Verification failed'),
+                (string) config('laravel-waf.challenge.failure_message', 'We could not confirm this request. Please try again.'),
+            ),
+            422,
+            [
+                'Cache-Control' => 'no-store',
+                'Content-Type' => 'text/html; charset=UTF-8',
+            ],
+        );
     }
 }

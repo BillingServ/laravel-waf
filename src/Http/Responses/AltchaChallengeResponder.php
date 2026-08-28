@@ -5,10 +5,10 @@ namespace BillingServ\LaravelWaf\Http\Responses;
 use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\RequestId;
+use BillingServ\LaravelWaf\Support\SameOriginUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Throwable;
 
 final class AltchaChallengeResponder implements ChallengeResponder
 {
@@ -50,7 +50,7 @@ final class AltchaChallengeResponder implements ChallengeResponder
         if ($token === null && $returnTo !== '/') {
             $token = $this->tokens->issueRequest($ip, '/', $tokenTtl);
         }
-        $verifyUrl = $this->verifyUrl();
+        $verifyUrl = $this->verifyUrl($request);
 
         if ($token === null || $verifyUrl === null) {
             return $this->unavailable($request, $headers);
@@ -62,7 +62,7 @@ final class AltchaChallengeResponder implements ChallengeResponder
         }
 
         if ($livewireRequest) {
-            $challengePageUrl = $this->challengePageUrl($token);
+            $challengePageUrl = $this->challengePageUrl($request, $token);
             if ($challengePageUrl !== null) {
                 $livewire = LivewireResponse::challenge($request, $challengePageUrl, $headers);
                 if ($livewire !== null) {
@@ -255,28 +255,27 @@ final class AltchaChallengeResponder implements ChallengeResponder
             && strtolower((string) config('laravel-waf.challenge.altcha.display', '')) === 'invisible';
     }
 
-    private function verifyUrl(): ?string
+    private function verifyUrl(Request $request): ?string
     {
-        try {
-            return $this->safeUrl(route((string) config('laravel-waf.challenge.verify_route')));
-        } catch (Throwable) {
+        $route = config('laravel-waf.challenge.verify_route');
+        if (!is_string($route) || $route === '') {
             return null;
         }
+
+        return SameOriginUrl::route($request, $route);
     }
 
-    private function challengePageUrl(string $token): ?string
+    private function challengePageUrl(Request $request, string $token): ?string
     {
-        try {
-            // The signed token can contain an accepted return path of up to
-            // 2048 bytes. Base64 encoding legitimately makes the internal
-            // challenge URL longer than the cap used for configured URLs.
-            return $this->safeUrl(
-                route('laravel-waf.challenge.page', ['_waf_challenge' => $token]),
-                self::MAX_GENERATED_CHALLENGE_URL_LENGTH,
-            );
-        } catch (Throwable) {
-            return null;
-        }
+        // The signed token can contain an accepted return path of up to 2048
+        // bytes. Base64 encoding legitimately makes the internal challenge
+        // URL longer than the cap used for configured URLs.
+        return SameOriginUrl::route(
+            $request,
+            'laravel-waf.challenge.page',
+            ['_waf_challenge' => $token],
+            self::MAX_GENERATED_CHALLENGE_URL_LENGTH,
+        );
     }
 
     private function returnTo(Request $request): string

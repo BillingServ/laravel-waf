@@ -496,12 +496,13 @@ final class DdosProtectionTest extends TestCase
         $response->assertOk()->assertHeader('X-Laravel-Waf-Challenge', 'required');
         $redirect = $response->json('components.0.effects.redirect');
         self::assertIsString($redirect);
-        self::assertStringContainsString('/_waf/challenge?', $redirect);
+        self::assertStringStartsWith('/_waf/challenge?', $redirect);
 
         $page = $this->get(parse_url($redirect, PHP_URL_PATH).'?'.parse_url($redirect, PHP_URL_QUERY));
         $page->assertStatus(429)
             ->assertSee('altcha-widget')
-            ->assertSee('Checking your browser');
+            ->assertSee('Checking your browser')
+            ->assertSee('action="/_waf/challenge/verify"', false);
 
         preg_match('/name="_waf_challenge" value="([^"]+)"/', $page->getContent(), $matches);
         self::assertNotEmpty($matches[1] ?? null);
@@ -590,7 +591,7 @@ final class DdosProtectionTest extends TestCase
             ->assertHeader('X-Laravel-Waf-Challenge', 'required')
             ->assertJsonPath('challenge', true)
             ->assertJsonPath('provider', 'altcha')
-            ->assertJsonPath('verification_url', 'http://localhost/_waf/challenge/verify')
+            ->assertJsonPath('verification_url', '/_waf/challenge/verify')
             ->assertJsonStructure(['challenge_token']);
     }
 
@@ -734,7 +735,7 @@ final class DdosProtectionTest extends TestCase
         $redirect = $response->json('components.0.effects.redirect');
         self::assertIsString($redirect);
         self::assertGreaterThan(2048, strlen($redirect));
-        self::assertStringContainsString('/_waf/challenge?', $redirect);
+        self::assertStringStartsWith('/_waf/challenge?', $redirect);
 
         $page = $this->withServerVariables($server)
             ->get(parse_url($redirect, PHP_URL_PATH).'?'.parse_url($redirect, PHP_URL_QUERY));

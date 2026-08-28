@@ -115,7 +115,10 @@ state-changing request must not be replayed with credentials, verification
 returns to the page that sent the request. Keep `laravel-waf.login` attached to
 credential endpoints: generic DDoS limits still apply there, but an exhausted
 bucket returns a plain `429` instead of replacing the submitted credentials
-with a browser challenge.
+with a browser challenge. Package-owned browser redirects and form actions use
+same-origin relative URLs while retaining the request's application base path,
+so a different configured `APP_URL`, tenant host, proxy origin, or subdirectory
+mount cannot detach the flow from the current Laravel session.
 
 ## Custom integrations
 

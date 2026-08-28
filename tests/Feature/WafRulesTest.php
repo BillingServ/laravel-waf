@@ -167,6 +167,7 @@ final class WafRulesTest extends TestCase
 
     public function test_livewire_sql_injection_redirects_to_the_top_level_blocked_page(): void
     {
+        $this->app['url']->forceRootUrl('https://configured-origin.example');
         config()->set('laravel-waf.agent.enabled', true);
         config()->set('laravel-waf.agent.auto_block_on_finding', true);
         $decisionSink = new RecordingDecisionSink();
@@ -177,10 +178,15 @@ final class WafRulesTest extends TestCase
             'memo' => ['id' => 'test-component', 'name' => 'login', 'children' => []],
             'checksum' => 'test-checksum',
         ], JSON_THROW_ON_ERROR);
+        $server = [
+            'REMOTE_ADDR' => '203.0.113.55',
+            'SCRIPT_NAME' => '/app/index.php',
+            'SCRIPT_FILENAME' => '/var/www/app/index.php',
+        ];
 
-        $response = $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.55'])
+        $response = $this->withServerVariables($server)
             ->withHeaders(['X-Livewire' => 'true'])
-            ->postJson('/inspect', [
+            ->postJson('/app/inspect', [
                 'components' => [[
                     'snapshot' => $snapshot,
                     'updates' => [],
@@ -190,10 +196,10 @@ final class WafRulesTest extends TestCase
 
         $response->assertOk()
             ->assertHeader('X-Laravel-Waf-Blocked', 'true')
-            ->assertJsonPath('components.0.effects.redirect', url('/_waf/blocked'));
+            ->assertJsonPath('components.0.effects.redirect', '/app/_waf/blocked');
         self::assertSame(1, $decisionSink->blocks);
 
-        $this->get('/_waf/blocked')
+        $this->withServerVariables($server)->get('/app/_waf/blocked')
             ->assertStatus(403)
             ->assertHeader('X-Laravel-Waf-Blocked', 'true')
             ->assertSee('Why have I been blocked?');
@@ -203,15 +209,16 @@ final class WafRulesTest extends TestCase
             'checksum' => 'test-checksum',
         ];
 
-        $legacyResponse = $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.56'])
+        $server['REMOTE_ADDR'] = '203.0.113.56';
+        $legacyResponse = $this->withServerVariables($server)
             ->withHeaders(['X-Livewire' => 'true'])
-            ->postJson('/inspect', [
+            ->postJson('/app/inspect', [
                 'fingerprint' => ['id' => 'test-component', 'name' => 'login', 'locale' => 'en'],
                 'serverMemo' => $serverMemo,
                 'updates' => [],
             ]);
         $legacyResponse->assertOk()
-            ->assertJsonPath('effects.redirect', url('/_waf/blocked'))
+            ->assertJsonPath('effects.redirect', '/app/_waf/blocked')
             ->assertJsonPath('serverMemo.data.email', '=1 UNION SELECT password FROM users');
     }
 

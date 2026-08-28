@@ -2,10 +2,10 @@
 
 namespace BillingServ\LaravelWaf\Http\Responses;
 
+use BillingServ\LaravelWaf\Support\SameOriginUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Throwable;
 
 final class LivewireResponse
 {
@@ -68,7 +68,7 @@ final class LivewireResponse
             return null;
         }
 
-        $url = self::blockedUrl();
+        $url = self::blockedUrl($request);
         $components = $request->input('components');
         if ($url === null) {
             return null;
@@ -113,17 +113,15 @@ final class LivewireResponse
         return $request->hasHeader('X-Livewire');
     }
 
-    private static function blockedUrl(): ?string
+    private static function blockedUrl(Request $request): ?string
     {
-        try {
-            $route = config('laravel-waf.challenge.blocked_route', 'laravel-waf.blocked');
-            if (!is_string($route) || $route === '') {
-                return null;
-            }
-
-            return route($route);
-        } catch (Throwable) {
+        $route = config('laravel-waf.challenge.blocked_route', 'laravel-waf.blocked');
+        if (!is_string($route) || $route === '') {
             return null;
         }
+
+        // Keep the navigation on the request origin and retain a subdirectory
+        // mount or trusted proxy prefix so the current session remains valid.
+        return SameOriginUrl::route($request, $route);
     }
 }

@@ -61,14 +61,6 @@ final class RequestInspection
         if (config('laravel-waf.rules.enabled', true)) {
             try {
                 $findings = array_merge($findings, $this->engine->inspect($request));
-                // The engine caps its own results, but the merged array can
-                // hold one extra behavior finding; keep the total bounded so
-                // logging, notifications, and agent blocks stay capped too.
-                $findings = array_slice(
-                    $findings,
-                    0,
-                    max(1, min(32, (int) config('laravel-waf.rules.max_findings', 3))),
-                );
             } catch (Throwable $exception) {
                 $this->metrics->error('request_inspection');
                 $this->warning('Laravel WAF request inspection failed.', [
@@ -79,6 +71,26 @@ final class RequestInspection
                 if (config('laravel-waf.rules.fail_mode', 'open') === 'closed') {
                     return $this->unavailable($request);
                 }
+            }
+
+            $findings = array_slice(
+                $findings,
+                0,
+                max(1, min(32, (int) config('laravel-waf.rules.max_findings', 3))),
+            );
+
+            // One additional finding must not displace an existing reject action.
+            if ($request->attributes->get('laravel-waf.input_truncated') === true) {
+                array_unshift($findings, new Finding(
+                    'input',
+                    'limit_exceeded',
+                    'high',
+                    'request',
+                    null,
+                    $ip,
+                    RequestContext::routeLabel($request),
+                    RequestContext::method($request),
+                ));
             }
         }
 

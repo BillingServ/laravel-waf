@@ -8,13 +8,17 @@ use Illuminate\Http\Request;
 final class RequestRuleEngine
 {
     /** @param iterable<InspectionRule> $rules */
-    public function __construct(private readonly iterable $rules)
-    {
+    public function __construct(
+        private readonly iterable $rules,
+        private readonly RequestInputCollector $inputs = new RequestInputCollector(),
+    ) {
     }
 
     /** @return array<int, Finding> */
     public function inspect(Request $request): array
     {
+        // Always establish input completeness, even if an early rule fills the finding budget.
+        $this->inputs->collect($request);
         $maxFindings = max(1, min(32, (int) config('laravel-waf.rules.max_findings', 3)));
         $findings = [];
 

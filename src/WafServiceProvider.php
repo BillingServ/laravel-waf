@@ -153,7 +153,7 @@ final class WafServiceProvider extends ServiceProvider
             }
 
             /** @var array<int, InspectionRule> $rules */
-            return new RequestRuleEngine($rules);
+            return new RequestRuleEngine($rules, $inputs);
         });
 
         $this->app->singleton(NotificationSink::class, fn ($app): NotificationSink => new LaravelNotificationSink(

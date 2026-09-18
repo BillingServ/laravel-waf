@@ -7,6 +7,8 @@ use Illuminate\Http\UploadedFile;
 
 final class RequestInputCollector
 {
+    private bool $truncated = false;
+
     /** @return array<int, InputValue> */
     public function collect(Request $request): array
     {
@@ -15,11 +17,12 @@ final class RequestInputCollector
             return $cached;
         }
 
+        $this->truncated = false;
         $config = (array) config('laravel-waf.rules.input', []);
-        $maxValues = max(1, min(4096, (int) ($config['max_values'] ?? 256)));
-        $maxDepth = max(1, min(12, (int) ($config['max_depth'] ?? 5)));
-        $maxValueBytes = max(1, min(1048576, (int) ($config['max_value_bytes'] ?? 8192)));
-        $maxTotalBytes = max($maxValueBytes, min(4194304, (int) ($config['max_total_bytes'] ?? 65536)));
+        $maxValues = max(1, min(4096, (int) ($config['max_values'] ?? 1024)));
+        $maxDepth = max(1, min(12, (int) ($config['max_depth'] ?? 10)));
+        $maxValueBytes = max(1, min(1048576, (int) ($config['max_value_bytes'] ?? 65536)));
+        $maxTotalBytes = max($maxValueBytes, min(4194304, (int) ($config['max_total_bytes'] ?? 262144)));
         $values = [];
         $totalBytes = 0;
 
@@ -37,12 +40,25 @@ final class RequestInputCollector
 
         if (($config['body'] ?? true) === true) {
             $body = $request->request->all();
-            if ($body === [] && str_contains(strtolower($request->header('content-type', '')), 'json')) {
+            $contentType = strtolower(trim(explode(';', $request->header('content-type', ''))[0]));
+            $isJson = str_ends_with($contentType, '/json') || str_ends_with($contentType, '+json');
+            if ($body === [] && $isJson) {
                 try {
                     $body = $request->json()->all();
+                    if ($body === []) {
+                        // Laravel also returns [] for malformed JSON; inspect
+                        // that raw content instead of treating it as empty.
+                        json_decode($request->getContent(), true, 512, JSON_THROW_ON_ERROR);
+                    }
                 } catch (\Throwable) {
-                    $body = [];
+                    $body = $request->getContent();
                 }
+            }
+
+            // Multipart framing/file contents are not input fields. JSON is
+            // already parsed above, including legitimate empty arrays/objects.
+            if ($body === [] && !$isJson && $contentType !== 'multipart/form-data') {
+                $body = $request->getContent();
             }
 
             $this->walk($values, $totalBytes, $maxValues, $maxValueBytes, $maxTotalBytes, 'body', $body, 0, $maxDepth);
@@ -77,6 +93,7 @@ final class RequestInputCollector
         }
 
         $request->attributes->set('laravel-waf.input_values', $values);
+        $request->attributes->set('laravel-waf.input_truncated', $this->truncated);
 
         return $values;
     }
@@ -125,15 +142,17 @@ final class RequestInputCollector
         int $maxValueBytes,
         int $maxTotalBytes,
     ): void {
+        if ($this->truncated || $files === []) {
+            return;
+        }
+
         if ($depth > $maxDepth) {
+            $this->truncated = true;
+
             return;
         }
 
         foreach ($files as $key => $file) {
-            if (count($values) >= $maxValues || $totalBytes >= $maxTotalBytes) {
-                return;
-            }
-
             $field = ($prefix === '' ? '' : $prefix.'.').preg_replace('/[^A-Za-z0-9_.:-]/', '_', (string) $key);
 
             if ($file instanceof UploadedFile) {
@@ -156,11 +175,7 @@ final class RequestInputCollector
                         ));
                     }
                 }
-
-                continue;
-            }
-
-            if (is_array($file)) {
+            } elseif (is_array($file)) {
                 $this->walkUploads(
                     $file,
                     $field,
@@ -172,6 +187,10 @@ final class RequestInputCollector
                     $maxValueBytes,
                     $maxTotalBytes,
                 );
+            }
+
+            if ($this->truncated) {
+                return;
             }
         }
     }
@@ -189,7 +208,13 @@ final class RequestInputCollector
         int $maxDepth,
         string $field = '',
     ): void {
-        if (count($values) >= $maxValues || $totalBytes >= $maxTotalBytes || $depth > $maxDepth) {
+        if ($this->truncated || $value === '' || $value === [] || (!is_string($value) && !is_array($value))) {
+            return;
+        }
+
+        if ($depth > $maxDepth) {
+            $this->truncated = true;
+
             return;
         }
 
@@ -200,10 +225,6 @@ final class RequestInputCollector
                 $value,
             ));
 
-            return;
-        }
-
-        if (!is_array($value)) {
             return;
         }
 
@@ -223,7 +244,7 @@ final class RequestInputCollector
                 $nestedField,
             );
 
-            if (count($values) >= $maxValues || $totalBytes >= $maxTotalBytes) {
+            if ($this->truncated) {
                 return;
             }
         }
@@ -238,12 +259,19 @@ final class RequestInputCollector
         int $maxTotalBytes,
         InputValue $input,
     ): void {
+        if ($this->truncated || $input->value === '') {
+            return;
+        }
+
         if (count($values) >= $maxValues || $totalBytes >= $maxTotalBytes) {
+            $this->truncated = true;
+
             return;
         }
 
         $remaining = $maxTotalBytes - $totalBytes;
         $length = min(strlen($input->value), $maxValueBytes, $remaining);
+        $this->truncated = strlen($input->value) > $length;
         if ($length < 1) {
             return;
         }

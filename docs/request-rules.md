@@ -21,10 +21,40 @@ The built-in categories are:
 - `geo`: country allow and deny policy through a resolver.
 
 Input is collected from the path, query string, parsed body, and route
-parameters by default. Headers and cookies are opt-in. Values, total bytes,
-nesting depth, and value count are capped before matching. The matcher applies
+parameters by default. Non-JSON, non-multipart bodies without parsed fields
+are inspected as raw text, as is malformed JSON. Multipart file contents/framing are not scanned;
+client-supplied upload names and relative paths are inspected. Headers and
+cookies remain opt-in. Values, total bytes, nesting depth, and value count are
+capped before matching. The matcher applies
 limited URL decoding and HTML entity decoding; it never logs or emits the raw
 value.
+
+If enabled input cannot be fully collected within those caps, the WAF records
+an `input` / `limit_exceeded` finding instead of silently accepting partial
+inspection. It follows the global rule action: reject mode blocks, log mode
+records without blocking, and challenge mode uses the existing challenge/pass
+behavior. A challenge pass never bypasses reject mode. This one additional
+finding is retained alongside the normal finding budget so it cannot hide,
+or be hidden by, a category's reject action. The existing safe finding metadata,
+notifications, and optional automatic host-block settings also apply.
+
+Default inspection budgets are 64 KiB per value, 256 KiB total, 1,024 nonempty
+string values, and 10 levels of nesting. These include enabled sources such
+as the request path and upload names, but not uploaded file contents. Bytes
+are measured before normalization; a Livewire snapshot counts as one string.
+Override them using `LARAVEL_WAF_RULES_MAX_VALUE_BYTES`,
+`LARAVEL_WAF_RULES_MAX_INPUT_BYTES`, `LARAVEL_WAF_RULES_MAX_VALUES`, and
+`LARAVEL_WAF_RULES_MAX_DEPTH`. Existing published configuration or environment
+overrides retain their explicitly configured limits.
+
+Requests exactly at the limits remain valid. Requests over them, including
+benign large forms or deeply nested upload names, now trigger the configured
+action. Before enabling reject mode, size `rules.input.max_values`,
+`max_value_bytes`, `max_total_bytes`, and `max_depth` for legitimate traffic
+(for example large Livewire snapshots and rich-text fields). Category field
+exclusions skip pattern matching, not the shared input limits. These limits
+do not become unlimited when a field is excluded. Disabled input sources and
+explicit skipped routes keep their existing behavior.
 
 ## Actions
 

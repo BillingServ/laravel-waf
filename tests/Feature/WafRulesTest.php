@@ -302,7 +302,7 @@ final class WafRulesTest extends TestCase
             ->assertStatus(403);
     }
 
-    public function test_uploads_beyond_the_configured_depth_cap_are_ignored(): void
+    public function test_uploads_beyond_the_configured_depth_cap_are_rejected(): void
     {
         config()->set('laravel-waf.rules.input.max_depth', 2);
 
@@ -320,11 +320,10 @@ final class WafRulesTest extends TestCase
             }
         };
 
-        // Four levels deep: the walker must stop before reaching the payload.
+        // Four levels deep: reject input that the bounded walker cannot inspect.
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.67'])
             ->post('/inspect', ['a' => ['b' => ['c' => ['d' => $file]]]])
-            ->assertOk()
-            ->assertContent('ok');
+            ->assertStatus(403);
 
         // The same payload one level deep stays inside the bound and is caught.
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.68'])

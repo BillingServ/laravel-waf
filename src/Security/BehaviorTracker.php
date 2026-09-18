@@ -3,10 +3,9 @@
 namespace BillingServ\LaravelWaf\Security;
 
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
+use BillingServ\LaravelWaf\Support\RateLimiter;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Support\RequestContext;
-use Illuminate\Cache\RateLimiter;
-use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
@@ -16,7 +15,6 @@ final class BehaviorTracker
     public function __construct(
         private readonly RateLimiter $limiter,
         private readonly MetricsRecorder $metrics,
-        private readonly ?Repository $cache = null,
     ) {
     }
 
@@ -37,11 +35,11 @@ final class BehaviorTracker
                 static fn (int|string $kind): string => RateLimitKey::behavior($ip, (string) $kind),
                 array_keys($thresholds),
             );
-            $attempts = $this->cache?->many($keys);
+            $attempts = $this->limiter->attemptsMany($keys);
 
             foreach ($thresholds as $kind => $threshold) {
                 $key = RateLimitKey::behavior($ip, $kind);
-                if ($attempts !== null && ($attempts[$key] ?? 0) < $threshold) {
+                if (($attempts[$key] ?? 0) < $threshold) {
                     continue;
                 }
 
@@ -83,15 +81,17 @@ final class BehaviorTracker
         $ip = $request->ip() ?: 'unknown';
         $window = $this->window();
 
-        foreach ($kinds as $kind) {
-            try {
-                $this->limiter->hit(RateLimitKey::behavior($ip, $kind), $window);
-                $this->metrics->behavior($kind, 'recorded', RequestContext::routeLabel($request));
-            } catch (Throwable) {
-                $this->metrics->error('behavior_tracker');
+        try {
+            $this->limiter->hitMany(array_map(
+                static fn (string $kind): string => RateLimitKey::behavior($ip, $kind),
+                $kinds,
+            ), $window);
 
-                return;
+            foreach ($kinds as $kind) {
+                $this->metrics->behavior($kind, 'recorded', RequestContext::routeLabel($request));
             }
+        } catch (Throwable) {
+            $this->metrics->error('behavior_tracker');
         }
     }
 

@@ -43,11 +43,11 @@ use BillingServ\LaravelWaf\Support\NullDecisionSink;
 use BillingServ\LaravelWaf\Support\NullGeoIpResolver;
 use BillingServ\LaravelWaf\Support\NullMetricsSink;
 use BillingServ\LaravelWaf\Support\OutboundUrlGuard;
+use BillingServ\LaravelWaf\Support\RateLimiter;
 use BillingServ\LaravelWaf\Support\SecurityHeaders;
 use BillingServ\LaravelWaf\Support\SecurityNotifier;
 use BillingServ\LaravelWaf\Support\UnixSocketDecisionSink;
 use BillingServ\LaravelWaf\Support\UnixSocketMetricsSink;
-use Illuminate\Cache\RateLimiter;
 use Illuminate\Cache\Repository;
 use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
@@ -89,7 +89,6 @@ final class WafServiceProvider extends ServiceProvider
         $this->app->singleton(BehaviorTracker::class, fn ($app): BehaviorTracker => new BehaviorTracker(
             $app->make(RateLimiter::class),
             $app->make(MetricsRecorder::class),
-            $app->make('cache')->store($app['config']->get('cache.limiter')),
         ));
 
         $this->app->singleton(SecurityHeaders::class, static fn (): SecurityHeaders => new SecurityHeaders());

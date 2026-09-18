@@ -7,10 +7,11 @@ use BillingServ\LaravelWaf\Support\AgentBlocker;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\InternalEndpoint;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
+use BillingServ\LaravelWaf\Support\RateLimiter;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Support\RequestContext;
 use Closure;
-use Illuminate\Cache\RateLimiter;
+use Illuminate\Cache\RateLimiter as LaravelRateLimiter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
@@ -107,38 +108,47 @@ final class DdosProtection
         }
 
         $rules = $this->rules($route, $challengePassed);
-        $violation = null;
-        $remaining = PHP_INT_MAX;
-        $limit = PHP_INT_MAX;
         $includeHeaders = config('laravel-waf.ddos.include_headers', true);
 
         try {
-            foreach ($rules as $rule) {
-                $key = RateLimitKey::for($rule['scope'], $ip, $rule['scope'] === 'route' ? $route : '');
+            $keys = array_map(
+                static fn (array $rule): string => RateLimitKey::for($rule['scope'], $ip, $rule['scope'] === 'route' ? $route : ''),
+                $rules,
+            );
+            [$violation, $remaining, $limit] = $this->limiter->batch($keys, static function (LaravelRateLimiter $limiter) use ($rules, $keys, $includeHeaders): array {
+                $violation = null;
+                $remaining = PHP_INT_MAX;
+                $limit = PHP_INT_MAX;
 
-                // tooManyAttempts keeps Laravel's timer-aware expiry reset:
-                // a counter that outlived its timer entry starts a fresh
-                // window instead of locking out on a stale count.
-                if ($this->limiter->tooManyAttempts($key, $rule['max_attempts'])) {
-                    $violation = [
-                        'scope' => $rule['scope'],
-                        'retry_after' => max(1, $this->limiter->availableIn($key)),
-                    ];
-                    // The rejecting bucket's own quota is the one clients see;
-                    // min() would advertise a smaller non-rejecting window.
-                    $limit = $rule['max_attempts'];
+                foreach ($rules as $index => $rule) {
+                    $key = $keys[$index];
 
-                    break;
+                    // tooManyAttempts keeps Laravel's timer-aware expiry reset:
+                    // a counter that outlived its timer entry starts a fresh
+                    // window instead of locking out on a stale count.
+                    if ($limiter->tooManyAttempts($key, $rule['max_attempts'])) {
+                        $violation = [
+                            'scope' => $rule['scope'],
+                            'retry_after' => max(1, $limiter->availableIn($key)),
+                        ];
+                        // The rejecting bucket's own quota is the one clients see;
+                        // min() would advertise a smaller non-rejecting window.
+                        $limit = $rule['max_attempts'];
+
+                        break;
+                    }
+
+                    $attempts = $limiter->hit($key, $rule['decay_seconds']);
+
+                    if ($includeHeaders) {
+                        $remaining = min($remaining, max(0, $rule['max_attempts'] - $attempts));
+                    }
+
+                    $limit = min($limit, $rule['max_attempts']);
                 }
 
-                $attempts = $this->limiter->hit($key, $rule['decay_seconds']);
-
-                if ($includeHeaders) {
-                    $remaining = min($remaining, max(0, $rule['max_attempts'] - $attempts));
-                }
-
-                $limit = min($limit, $rule['max_attempts']);
-            }
+                return [$violation, $remaining, $limit];
+            });
         } catch (Throwable) {
             $this->metrics->error('rate_limiter');
 

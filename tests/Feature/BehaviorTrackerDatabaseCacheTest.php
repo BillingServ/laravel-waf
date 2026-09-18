@@ -168,6 +168,31 @@ final class BehaviorTrackerDatabaseCacheTest extends TestCase
         self::assertNull($this->app->make(BehaviorTracker::class)->inspect($this->request()));
     }
 
+    public function test_tenant_switches_keep_batch_reads_and_recorded_counts_together(): void
+    {
+        $earlyLimiter = $this->app->make(RateLimiter::class);
+        $tracker = $this->app->make(BehaviorTracker::class);
+        Schema::create('tenant_cache', static function (Blueprint $table): void {
+            $table->string('key')->primary();
+            $table->text('value');
+            $table->integer('expiration');
+        });
+
+        config()->set('cache.stores.database.table', 'tenant_cache');
+        app('cache')->forgetDriver('database');
+
+        $tracker->record($this->request(), response('', 401));
+        $tracker->record($this->request(), response('', 401));
+
+        self::assertSame(0, $earlyLimiter->attempts($this->key('401')));
+        self::assertSame('repeated_401', $tracker->inspect($this->request())?->rule);
+        self::assertSame(2, cache()->get($this->key('401')));
+
+        config()->set('cache.stores.database.table', 'cache');
+        app('cache')->forgetDriver('database');
+        self::assertNull($tracker->inspect($this->request()));
+    }
+
     private function request(): Request
     {
         return Request::create('/metrics', 'POST', server: ['REMOTE_ADDR' => '203.0.113.10']);

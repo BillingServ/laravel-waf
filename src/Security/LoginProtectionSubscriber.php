@@ -4,13 +4,13 @@ namespace BillingServ\LaravelWaf\Security;
 
 use BillingServ\LaravelWaf\Support\AgentBlocker;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
+use BillingServ\LaravelWaf\Support\RateLimiter;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Support\RequestContext;
 use BillingServ\LaravelWaf\Support\SecurityNotifier;
 use Illuminate\Auth\Events\Failed;
 use Illuminate\Auth\Events\Lockout;
 use Illuminate\Auth\Events\Login;
-use Illuminate\Cache\RateLimiter;
 use Illuminate\Events\Dispatcher;
 use Illuminate\Http\Request;
 use Psr\Log\LoggerInterface;

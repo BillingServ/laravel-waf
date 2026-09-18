@@ -3,7 +3,6 @@
 namespace BillingServ\LaravelWaf\Support;
 
 use BillingServ\LaravelWaf\Contracts\DecisionSink;
-use Illuminate\Cache\RateLimiter;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\HttpFoundation\IpUtils;
 use Throwable;

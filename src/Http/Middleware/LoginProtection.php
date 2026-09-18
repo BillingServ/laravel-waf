@@ -2,11 +2,11 @@
 
 namespace BillingServ\LaravelWaf\Http\Middleware;
 
-use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Support\MetricsRecorder;
+use BillingServ\LaravelWaf\Support\RateLimiter;
+use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Support\RequestContext;
 use Closure;
-use Illuminate\Cache\RateLimiter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;

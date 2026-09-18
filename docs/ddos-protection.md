@@ -23,6 +23,26 @@ limiter twice.
 
 Laravel is not able to observe requests that Nginx or iptables reject. Monitor Nginx and host metrics alongside the Laravel WAF metrics.
 
+## Database cache counters
+
+The WAF resolves `cache.limiter` (or the current default cache store) when it
+uses a counter, including after tenant middleware replaces a cache driver.
+Behavior checks and updates use this same store. Laravel's application-wide
+rate limiter binding is not replaced.
+
+With a database cache, the global, route and burst buckets share a batch read
+and one database transaction. Related response-error counters are also updated
+in one transaction. Laravel's locked increments, timer-expiry handling and
+cache serialization remain in use; prefetched counts are never used to
+overwrite increments. Transactions finish before application code runs, and
+retries discard their previous snapshots. Other cache drivers use Laravel's
+normal limiter operations.
+
+Applications using tenant-specific stores must select the tenant and invalidate
+the old cache driver before the WAF executes. Correcting an earlier store
+mismatch can start fresh counters in the intended tenant store. Application
+`throttle` middleware still performs its own independent counter operations.
+
 ## Fail-open behavior
 
 The Laravel middleware defaults to `fail_mode=open` so a cache or metrics failure does not turn into an application-wide outage. Nginx remains the earlier protection layer. Set `LARAVEL_WAF_DDOS_FAIL_MODE=closed` only when the protected route can tolerate a temporary 503 during rate-limiter failure.

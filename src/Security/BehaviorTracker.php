@@ -6,6 +6,7 @@ use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Support\RequestContext;
 use Illuminate\Cache\RateLimiter;
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
@@ -15,6 +16,7 @@ final class BehaviorTracker
     public function __construct(
         private readonly RateLimiter $limiter,
         private readonly MetricsRecorder $metrics,
+        private readonly ?Repository $cache = null,
     ) {
     }
 
@@ -25,13 +27,26 @@ final class BehaviorTracker
         }
 
         $ip = $request->ip() ?: 'unknown';
-        foreach ($this->thresholds() as $kind => $threshold) {
-            if ($threshold < 1) {
-                continue;
-            }
+        $thresholds = array_filter($this->thresholds(), static fn (int $threshold): bool => $threshold > 0);
+        if ($thresholds === []) {
+            return null;
+        }
 
-            try {
+        try {
+            $keys = array_map(
+                static fn (int|string $kind): string => RateLimitKey::behavior($ip, (string) $kind),
+                array_keys($thresholds),
+            );
+            $attempts = $this->cache?->many($keys);
+
+            foreach ($thresholds as $kind => $threshold) {
                 $key = RateLimitKey::behavior($ip, $kind);
+                if ($attempts !== null && ($attempts[$key] ?? 0) < $threshold) {
+                    continue;
+                }
+
+                // Recheck reached thresholds through Laravel so timer expiry,
+                // stale-counter resets and concurrent changes keep their semantics.
                 if (!$this->limiter->tooManyAttempts($key, $threshold)) {
                     continue;
                 }
@@ -44,11 +59,11 @@ final class BehaviorTracker
                 }
 
                 return $this->finding($request, $kind);
-            } catch (Throwable) {
-                $this->metrics->error('behavior_tracker');
-
-                return null;
             }
+        } catch (Throwable) {
+            $this->metrics->error('behavior_tracker');
+
+            return null;
         }
 
         return null;

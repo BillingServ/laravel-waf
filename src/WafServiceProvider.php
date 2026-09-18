@@ -89,6 +89,7 @@ final class WafServiceProvider extends ServiceProvider
         $this->app->singleton(BehaviorTracker::class, fn ($app): BehaviorTracker => new BehaviorTracker(
             $app->make(RateLimiter::class),
             $app->make(MetricsRecorder::class),
+            $app->make('cache')->store($app['config']->get('cache.limiter')),
         ));
 
         $this->app->singleton(SecurityHeaders::class, static fn (): SecurityHeaders => new SecurityHeaders());

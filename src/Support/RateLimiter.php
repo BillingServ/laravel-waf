@@ -59,6 +59,7 @@ final class RateLimiter
 
     /**
      * Keep callbacks free of external side effects: database deadlocks may retry.
+     * Access counters only through the supplied limiter until the batch returns.
      *
      * @template T
      * @param array<int, string> $keys
@@ -75,7 +76,13 @@ final class RateLimiter
         }
 
         return $store->getConnection()->transaction(
-            static fn () => $callback(new DatabaseCounterBatch($cache, $keys)),
+            static function () use ($cache, $keys, $callback): mixed {
+                $batch = new DatabaseCounterBatch($cache, $keys);
+                $result = $callback($batch);
+                $batch->flush();
+
+                return $result;
+            },
             3,
         );
     }

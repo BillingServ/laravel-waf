@@ -30,13 +30,23 @@ uses a counter, including after tenant middleware replaces a cache driver.
 Behavior checks and updates use this same store. Laravel's application-wide
 rate limiter binding is not replaced.
 
-With a database cache, the global, route and burst buckets share a batch read
-and one database transaction. Related response-error counters are also updated
-in one transaction. Laravel's locked increments, timer-expiry handling and
-cache serialization remain in use; prefetched counts are never used to
-overwrite increments. Transactions finish before application code runs, and
-retries discard their previous snapshots. Other cache drivers use Laravel's
-normal limiter operations.
+With a database cache, the global, route and burst buckets share one database
+transaction. Integer counters and their timers are read together under a row
+lock, then changed counters are written in one statement. Existing windows keep
+their expiration; missing or expired entries start their own configured windows
+only when hit. Related response-error counters use the same batching.
+
+Missing rows are reserved in one insert-if-absent statement and read again under
+lock, so a competing initializer's counts are preserved. Reservations left unused
+by an early rejection are removed before commit. This avoids per-bucket cache
+reads, inserts and updates on both first requests and subsequent requests.
+
+Custom database stores, non-integer values and SQL Server initialization retain
+Laravel's normal operations. Crossing a clock boundary flushes pending writes
+before returning to Laravel's expiry handling. Transactions finish before
+application code runs, and deadlock retries discard pending counts and rebuild
+the batch. Batch callbacks must access counters only through the supplied
+limiter. Other cache drivers use Laravel's normal limiter operations.
 
 Applications using tenant-specific stores must select the tenant and invalidate
 the old cache driver before the WAF executes. Correcting an earlier store

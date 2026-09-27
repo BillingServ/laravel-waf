@@ -6,6 +6,7 @@ use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\RateLimiter;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Support\RequestContext;
+use Illuminate\Cache\RateLimiter as LaravelRateLimiter;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
@@ -36,6 +37,8 @@ final class BehaviorTracker
                 array_keys($thresholds),
             );
             $attempts = $this->limiter->attemptsMany($keys);
+            $reached = [];
+            $batchKeys = [];
 
             foreach ($thresholds as $kind => $threshold) {
                 $key = RateLimitKey::behavior($ip, $kind);
@@ -43,20 +46,43 @@ final class BehaviorTracker
                     continue;
                 }
 
-                // Recheck reached thresholds through Laravel so timer expiry,
-                // stale-counter resets and concurrent changes keep their semantics.
-                if (!$this->limiter->tooManyAttempts($key, $threshold)) {
-                    continue;
+                $reached[$kind] = $threshold;
+                $batchKeys[] = $key;
+                $batchKeys[] = RateLimitKey::behaviorAlert($ip, $kind);
+            }
+
+            if ($reached === []) {
+                return null;
+            }
+
+            $cooldown = max(1, (int) config('laravel-waf.behavior.alert_cooldown_seconds', 60));
+            $result = $this->limiter->batch($batchKeys, static function (LaravelRateLimiter $limiter) use ($reached, $ip, $cooldown): ?array {
+                foreach ($reached as $kind => $threshold) {
+                    // Recheck counters and timers under the same database lock
+                    // as the alert cooldown, preserving stale-counter resets.
+                    if (!$limiter->tooManyAttempts(RateLimitKey::behavior($ip, $kind), $threshold)) {
+                        continue;
+                    }
+
+                    $alertKey = RateLimitKey::behaviorAlert($ip, $kind);
+                    $alert = !$limiter->tooManyAttempts($alertKey, 1);
+                    if ($alert) {
+                        $limiter->hit($alertKey, $cooldown);
+                    }
+
+                    return ['kind' => (string) $kind, 'alert' => $alert];
                 }
 
-                $alertKey = RateLimitKey::behaviorAlert($ip, $kind);
-                $cooldown = max(1, (int) config('laravel-waf.behavior.alert_cooldown_seconds', 60));
-                if (!$this->limiter->tooManyAttempts($alertKey, 1)) {
-                    $this->limiter->hit($alertKey, $cooldown);
-                    $this->metrics->behavior($kind, 'alert', RequestContext::routeLabel($request));
+                return null;
+            });
+
+            if ($result !== null) {
+                // Database retries must not emit duplicate alert metrics.
+                if ($result['alert']) {
+                    $this->metrics->behavior($result['kind'], 'alert', RequestContext::routeLabel($request));
                 }
 
-                return $this->finding($request, $kind);
+                return $this->finding($request, $result['kind']);
             }
         } catch (Throwable) {
             $this->metrics->error('behavior_tracker');

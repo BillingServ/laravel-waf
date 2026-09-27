@@ -36,6 +36,11 @@ lock, then changed counters are written in one statement. Existing windows keep
 their expiration; missing or expired entries start their own configured windows
 only when hit. Related response-error counters use the same batching.
 
+Behavior inspection keeps a single counter read when no threshold is reached.
+Reached thresholds are rechecked with their timers and alert cooldowns in one
+batch, so blocked requests also avoid per-key cache reads and writes. Alert
+metrics are emitted after the batch commits to avoid duplicates during retries.
+
 Missing rows are reserved in one insert-if-absent statement and read again under
 lock, so a competing initializer's counts are preserved. Reservations left unused
 by an early rejection are removed before commit. This avoids per-bucket cache

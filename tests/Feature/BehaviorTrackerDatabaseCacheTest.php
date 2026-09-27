@@ -2,7 +2,9 @@
 
 namespace BillingServ\LaravelWaf\Tests\Feature;
 
+use BillingServ\LaravelWaf\Contracts\MetricsSink;
 use BillingServ\LaravelWaf\Security\BehaviorTracker;
+use BillingServ\LaravelWaf\Support\MetricsRecorder;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Tests\TestCase;
 use Illuminate\Cache\RateLimiter;
@@ -10,6 +12,8 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use PDOException;
+use RuntimeException;
 
 final class BehaviorTrackerDatabaseCacheTest extends TestCase
 {
@@ -46,6 +50,7 @@ final class BehaviorTrackerDatabaseCacheTest extends TestCase
             $table->text('value');
             $table->integer('expiration');
         });
+        $this->freezeTime();
     }
 
     public function test_all_behavior_counters_are_read_in_one_query(): void
@@ -166,6 +171,115 @@ final class BehaviorTrackerDatabaseCacheTest extends TestCase
         Schema::drop('cache');
 
         self::assertNull($this->app->make(BehaviorTracker::class)->inspect($this->request()));
+    }
+
+    public function test_first_behavior_alert_batches_threshold_timer_and_cooldown_queries(): void
+    {
+        $limiter = $this->app->make(RateLimiter::class);
+        $limiter->hit($this->key('403'), 60);
+        $limiter->hit($this->key('403'), 60);
+        DB::enableQueryLog();
+
+        self::assertSame('repeated_403', $this->app->make(BehaviorTracker::class)->inspect($this->request())?->rule);
+
+        // Initial counter read, locked read, reserve missing alert rows,
+        // locked reread and one write for the alert counter and timer.
+        self::assertCount(5, DB::getQueryLog());
+        self::assertSame(1, $limiter->attempts(RateLimitKey::behaviorAlert('203.0.113.10', '403')));
+        self::assertSame(2, $limiter->attempts($this->key('403')));
+    }
+
+    public function test_active_alert_cooldowns_need_only_two_reads_and_preserve_the_window(): void
+    {
+        $limiter = $this->app->make(RateLimiter::class);
+        $limiter->hit($this->key('403'), 600);
+        $limiter->hit($this->key('403'), 600);
+        $tracker = $this->app->make(BehaviorTracker::class);
+        self::assertNotNull($tracker->inspect($this->request()));
+        $this->travel(10)->seconds();
+        DB::enableQueryLog();
+
+        self::assertSame('repeated_403', $tracker->inspect($this->request())?->rule);
+
+        $queries = DB::getQueryLog();
+        self::assertCount(2, $queries);
+        foreach ($queries as $query) {
+            self::assertStringStartsWith('select', $query['query']);
+        }
+        $alertKey = RateLimitKey::behaviorAlert('203.0.113.10', '403');
+        self::assertSame(1, $limiter->attempts($alertKey));
+        self::assertSame(50, $limiter->availableIn($alertKey));
+    }
+
+    public function test_expired_alert_cooldowns_are_renewed_with_one_batched_write(): void
+    {
+        $limiter = $this->app->make(RateLimiter::class);
+        $limiter->hit($this->key('403'), 600);
+        $limiter->hit($this->key('403'), 600);
+        $alertKey = RateLimitKey::behaviorAlert('203.0.113.10', '403');
+        $limiter->hit($alertKey, 1);
+        $this->travel(2)->seconds();
+        DB::enableQueryLog();
+
+        self::assertSame('repeated_403', $this->app->make(BehaviorTracker::class)->inspect($this->request())?->rule);
+
+        // Counter prefetch, one locked read and one write, without per-key cleanup.
+        self::assertCount(3, DB::getQueryLog());
+        self::assertSame(1, $limiter->attempts($alertKey));
+        self::assertSame(60, $limiter->availableIn($alertKey));
+    }
+
+    public function test_alert_metrics_are_emitted_once_after_a_successful_retry(): void
+    {
+        $limiter = $this->app->make(RateLimiter::class);
+        $limiter->hit($this->key('403'), 600);
+        $limiter->hit($this->key('403'), 600);
+        $alertKey = RateLimitKey::behaviorAlert('203.0.113.10', '403');
+        $limiter->hit($alertKey, 1);
+        $this->travel(2)->seconds();
+        $sink = $this->createMock(MetricsSink::class);
+        $sink->expects(self::once())->method('increment')
+            ->with('behavior_events', ['kind' => '403', 'outcome' => 'alert', 'route' => 'unnamed'])
+            ->willReturnCallback(static function (): void {
+                self::assertSame(0, DB::transactionLevel());
+            });
+        $this->app->instance(MetricsSink::class, $sink);
+        $this->app->forgetInstance(MetricsRecorder::class);
+        $this->app->forgetInstance(BehaviorTracker::class);
+        $writes = 0;
+        DB::connection()->beforeExecuting(static function (string $query) use (&$writes): void {
+            if (str_starts_with($query, 'insert') && ++$writes === 1) {
+                throw new PDOException('database is locked');
+            }
+        });
+
+        self::assertSame('repeated_403', $this->app->make(BehaviorTracker::class)->inspect($this->request())?->rule);
+        self::assertSame(2, $writes);
+        self::assertSame(1, $limiter->attempts($alertKey));
+    }
+
+    public function test_failed_alert_writes_do_not_emit_alert_metrics(): void
+    {
+        $limiter = $this->app->make(RateLimiter::class);
+        $limiter->hit($this->key('403'), 600);
+        $limiter->hit($this->key('403'), 600);
+        $alertKey = RateLimitKey::behaviorAlert('203.0.113.10', '403');
+        $limiter->hit($alertKey, 1);
+        $this->travel(2)->seconds();
+        $sink = $this->createMock(MetricsSink::class);
+        $sink->expects(self::once())->method('increment')->with('errors', ['component' => 'behavior_tracker']);
+        $this->app->instance(MetricsSink::class, $sink);
+        $this->app->forgetInstance(MetricsRecorder::class);
+        $this->app->forgetInstance(BehaviorTracker::class);
+        DB::connection()->beforeExecuting(static function (string $query): void {
+            if (str_starts_with($query, 'insert')) {
+                throw new RuntimeException('Simulated cache write failure');
+            }
+        });
+
+        self::assertNull($this->app->make(BehaviorTracker::class)->inspect($this->request()));
+        self::assertSame(0, $limiter->attempts($alertKey));
+        self::assertSame(2, $limiter->attempts($this->key('403')));
     }
 
     public function test_tenant_switches_keep_batch_reads_and_recorded_counts_together(): void

@@ -15,7 +15,7 @@ final class SsrfRule extends PatternRule
     protected function patterns(): array
     {
         return [
-            ['id' => 'unsafe_scheme', 'pattern' => '~\b(?:file|gopher|dict|ftp|sftp|ldap|ldaps|data|phar|expect):~iu'],
+            ['id' => 'unsafe_scheme', 'pattern' => '~(?<![a-z0-9+.-])\b(?:file|gopher|dict|ftp|sftp|ldap|ldaps|data|phar|expect):~iu'],
         ];
     }
 

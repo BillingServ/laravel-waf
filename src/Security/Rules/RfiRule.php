@@ -12,7 +12,7 @@ final class RfiRule extends PatternRule
     protected function patterns(): array
     {
         return [
-            ['id' => 'dangerous_wrapper', 'pattern' => '~\b(?:php|data|file|gopher|expect|phar|zip):~iu'],
+            ['id' => 'dangerous_wrapper', 'pattern' => '~(?<![a-z0-9+.-])\b(?:php|data|file|gopher|expect|phar|zip):~iu'],
         ];
     }
 

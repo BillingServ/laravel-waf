@@ -154,6 +154,42 @@ final class WafRulesTest extends TestCase
             ->assertStatus(403);
     }
 
+    public function test_livewire_temporary_file_references_are_allowed(): void
+    {
+        $snapshot = json_encode([
+            'data' => ['billingSystemFile' => ['livewire-file:12345678:/temporary.sql', ['s' => 'fil']]],
+            'memo' => ['id' => 'test-component', 'name' => 'import-export', 'children' => []],
+            'checksum' => 'test-checksum',
+        ], JSON_THROW_ON_ERROR);
+
+        $this->withHeaders(['X-Livewire' => 'true'])
+            ->postJson('/inspect', ['components' => [['snapshot' => $snapshot, 'updates' => [], 'calls' => []]]])
+            ->assertOk()
+            ->assertHeaderMissing('X-Laravel-Waf-Blocked')
+            ->assertContent('ok');
+    }
+
+    public function test_dangerous_wrappers_are_still_blocked_inside_upload_snapshots(): void
+    {
+        foreach (['php://filter/resource=upload.sql', 'file:///tmp/upload.sql', 'gopher://127.0.0.1:6379/', 'data:text/plain,probe'] as $index => $url) {
+            $snapshot = json_encode([
+                'data' => [
+                    'billingSystemFile' => ['livewire-file:12345678:/temporary.sql', ['s' => 'fil']],
+                    'url' => $url,
+                ],
+                'memo' => ['id' => 'test-component', 'name' => 'import-export', 'children' => []],
+                'checksum' => 'test-checksum',
+            ], JSON_THROW_ON_ERROR);
+
+            $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.'.(150 + $index)])
+                ->withHeaders(['X-Livewire' => 'true'])
+                ->postJson('/inspect', ['components' => [['snapshot' => $snapshot, 'updates' => [], 'calls' => []]]])
+                ->assertOk()
+                ->assertHeader('X-Laravel-Waf-Blocked', 'true')
+                ->assertJsonPath('components.0.effects.redirect', '/_waf/blocked');
+        }
+    }
+
     public function test_sql_server_variable_probes_are_blocked(): void
     {
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.65'])

@@ -15,7 +15,7 @@ final class LfiRule extends PatternRule
             ['id' => 'path_traversal', 'pattern' => '~(?:^|[\\/])\.\.(?:[\\/]|$)~iu'],
             ['id' => 'null_byte', 'pattern' => '~\x00~u'],
             ['id' => 'sensitive_file', 'pattern' => '~(?:/etc/(?:passwd|shadow|hosts)|/proc/self/(?:environ|cmdline)|(?:^|[\\/])(?:win|boot)\.ini)~iu'],
-            ['id' => 'file_wrapper', 'pattern' => '~\b(?:php|file|zip|phar):~iu'],
+            ['id' => 'file_wrapper', 'pattern' => '~(?<![a-z0-9+.-])\b(?:php|file|zip|phar):~iu'],
         ];
     }
 }

@@ -506,6 +506,30 @@ final class WafRulesTest extends TestCase
             ->assertStatus(403);
     }
 
+    public function test_relative_cms_urls_and_empty_optional_urls_pass(): void
+    {
+        foreach (['/final-sweep', '/help/billing?tab=payments#card', '', './help', '?tab=payments', '#card'] as $index => $url) {
+            $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.'.(151 + $index)])
+                ->post('/inspect', ['components' => [['updates' => ['data.url' => $url]]]])
+                ->assertOk();
+        }
+    }
+
+    public function test_relative_url_handling_preserves_ssrf_protection(): void
+    {
+        foreach ([
+            '//127.0.0.1/admin', '/\\\\127.0.0.1/admin',
+            'http://127.0.0.1/admin', 'http://169.254.169.254/meta',
+            'http%3A%2F%2F127.0.0.1/admin',
+            'file:///etc/passwd', 'data:text/plain,secret',
+            '/file:///etc/passwd',
+        ] as $url) {
+            $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.152'])
+                ->post('/inspect', ['components' => [['updates' => ['data.url' => $url]]]])
+                ->assertStatus(403);
+        }
+    }
+
     public function test_ssrf_does_not_misclassify_nested_domain_fields(): void
     {
         $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.58'])

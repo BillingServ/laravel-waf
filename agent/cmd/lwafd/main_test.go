@@ -3,18 +3,99 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BillingServ/laravel-waf/agent/internal/blocklist"
+	"github.com/BillingServ/laravel-waf/agent/internal/metrics"
 	"github.com/BillingServ/laravel-waf/agent/internal/protocol"
+	"github.com/BillingServ/laravel-waf/agent/internal/signatures"
 )
+
+func TestSignatureWatcherPicksUpComposerPackageReplacement(t *testing.T) {
+	root := t.TempDir()
+	packagePath := filepath.Join(root, "vendor", "billingserv", "laravel-waf")
+	rulePath := filepath.Join("resources", "rules", "core.json")
+	writePackage := func(path, rules string) {
+		t.Helper()
+		file := filepath.Join(path, rulePath)
+		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(`{"version":1,"rules":[`+rules+`]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldRule := `{"id":"existing-probe","conditions":[{"target":"path","op":"equals","value":"/existing-probe"}]}`
+	newRule := `{"id":"new-probe","conditions":[{"target":"path","op":"equals","value":"/new-probe"}]}`
+	writePackage(packagePath, oldRule)
+	loader := signatures.NewLoader([]string{filepath.Join(packagePath, rulePath)})
+	if result := loader.Reload(); len(result.Errors) != 0 || result.Rules != 1 {
+		t.Fatalf("initial rules: %+v", result)
+	}
+	if rule, _ := loader.Current().Match(signatures.Request{URI: "/new-probe"}); rule != nil {
+		t.Fatal("new rule was active before the package update")
+	}
+
+	registry := metrics.NewRegistry("test", "test")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		watchSignatures(ctx, loader, 10*time.Millisecond, registry, log.New(io.Discard, "", 0))
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	waitFor := func(check func() bool, message string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for !check() {
+			if time.Now().After(deadline) {
+				t.Fatal(message)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	// Composer removes/replaces the package directory, not just core.json.
+	if err := os.Rename(packagePath, filepath.Join(root, "previous-package")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(func() bool {
+		response := httptest.NewRecorder()
+		registry.Handler().ServeHTTP(response, httptest.NewRequest("GET", "/metrics", nil))
+		return strings.Contains(response.Body.String(), `signature_reloads_total{instance="test",outcome="error"}`)
+	}, "watcher did not observe the missing package")
+	if rule, _ := loader.Current().Match(signatures.Request{URI: "/existing-probe"}); rule == nil || rule.ID != "existing-probe" {
+		t.Fatal("existing protection was lost while Composer replaced the package")
+	}
+
+	nextPackage := filepath.Join(root, "next-package")
+	writePackage(nextPackage, oldRule+","+newRule)
+	if err := os.Rename(nextPackage, packagePath); err != nil {
+		t.Fatal(err)
+	}
+	// No manual Reload, SIGHUP, copy, or daemon restart after installation.
+	waitFor(func() bool {
+		rule, _ := loader.Current().Match(signatures.Request{URI: "/new-probe"})
+		return rule != nil && rule.ID == "new-probe"
+	}, "installed package rule was not picked up automatically")
+	if rule, _ := loader.Current().Match(signatures.Request{URI: "/existing-probe"}); rule == nil || rule.ID != "existing-probe" {
+		t.Fatal("existing rule was lost after the package update")
+	}
+}
 
 func TestRunAddIPCommand(t *testing.T) {
 	socket, decisions := receiveDecision(t)

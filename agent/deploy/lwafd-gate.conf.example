@@ -1,4 +1,10 @@
 [Service]
+# Replace /var/www/app with the application's stable root during initial setup.
+# Both engines then follow Composer updates without copies or service reloads.
+# If the app is under /home, also set ProtectHome=tmpfs and
+# BindReadOnlyPaths=/home/my-application (a stable ancestor of vendor).
+# For a release symlink, bind its stable parent containing the releases instead.
+# For a private app directory, add SupplementaryGroups=<application-group>.
 ExecStart=
-ExecStart=/usr/local/bin/lwafd --socket /run/laravel-waf/agent.sock --socket-group www-data --secret-file /etc/laravel-waf/agent.secret --metrics-ingest-socket /run/laravel-waf/metrics.sock --metrics-ingest-socket-group www-data --gate-socket /run/laravel-waf/gate.sock --gate-socket-group www-data --gate-threshold 600 --gate-window 60s --challenge-cookie laravel_waf_challenge --signatures /etc/laravel-waf/rules.d,/var/www/app/vendor/billingserv/laravel-waf/resources/rules/core.json
+ExecStart=/usr/local/bin/lwafd --socket /run/laravel-waf/agent.sock --socket-group www-data --secret-file /etc/laravel-waf/agent.secret --metrics-ingest-socket /run/laravel-waf/metrics.sock --metrics-ingest-socket-group www-data --gate-socket /run/laravel-waf/gate.sock --gate-socket-group www-data --gate-threshold 600 --gate-window 60s --challenge-cookie laravel_waf_challenge --signatures /var/www/app/vendor/billingserv/laravel-waf/resources/rules/core.json,/etc/laravel-waf/rules.d
 ExecReload=/bin/kill -HUP $MAINPID

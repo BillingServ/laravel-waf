@@ -141,6 +141,36 @@ final class SignatureTest extends TestCase
         $this->get('/inspect?q=other')->assertOk();
     }
 
+    public function test_a_replaced_composer_package_is_picked_up_without_resetting_the_loader(): void
+    {
+        $package = $this->directory.'/vendor/billingserv/laravel-waf';
+        $relative = '/resources/rules/core.json';
+        mkdir(dirname($package.$relative), 0700, true);
+        $oldRule = ['id' => 'existing-probe', 'conditions' => [
+            ['target' => 'query', 'op' => 'contains', 'value' => 'existing-probe'],
+        ]];
+        $newRule = ['id' => 'new-probe', 'conditions' => [
+            ['target' => 'query', 'op' => 'contains', 'value' => 'new-probe'],
+        ]];
+        file_put_contents($package.$relative, json_encode(['version' => 1, 'rules' => [$oldRule]], JSON_THROW_ON_ERROR));
+        config()->set('laravel-waf.signatures.builtin', false);
+        config()->set('laravel-waf.signatures.paths', [$package.$relative]);
+
+        $this->get('/inspect?q=existing-probe')->assertStatus(403);
+        $this->get('/inspect?q=new-probe')->assertOk();
+        rename($package, $this->directory.'/previous-package');
+        $this->get('/inspect?q=existing-probe')->assertStatus(403);
+
+        $next = $this->directory.'/next-package';
+        mkdir(dirname($next.$relative), 0700, true);
+        file_put_contents($next.$relative, json_encode(['version' => 1, 'rules' => [$oldRule, $newRule]], JSON_THROW_ON_ERROR));
+        rename($next, $package);
+
+        $this->get('/inspect?q=new-probe')->assertStatus(403);
+        $this->get('/inspect?q=existing-probe')->assertStatus(403);
+        $this->get('/inspect?q=ordinary')->assertOk();
+    }
+
     public function test_an_invalid_edit_keeps_the_last_valid_rules(): void
     {
         $path = $this->writeRules('50-local.json', [

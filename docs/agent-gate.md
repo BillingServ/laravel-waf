@@ -83,7 +83,8 @@ sudo ./bin/lwafd \
   --gate-socket-group www-data \
   --gate-threshold 600 \
   --gate-window 60s \
-  --challenge-cookie laravel_waf_challenge
+  --challenge-cookie laravel_waf_challenge \
+  --signatures /var/www/app/vendor/billingserv/laravel-waf/resources/rules/core.json,/etc/laravel-waf/rules.d
 ```
 
 The defaults mirror Laravel's normal limits: 60 unverified requests to one path
@@ -94,9 +95,11 @@ or 120 total requests from one client in the same gate window, followed by a
 blocks.
 
 The gate also enforces [signature files](signatures.md) before PHP. By default it loads
-`/etc/laravel-waf/rules.d`; add the package's `resources/rules/core.json` to
-`--signatures` to enforce the built-in scanner rules. Set `--signatures ""` to
-turn signatures off.
+`/etc/laravel-waf/rules.d`. The command above also loads the installed package's
+built-in scanner rules; replace `/var/www/app` with your application root once.
+Later Composer package updates take effect automatically, within 5 seconds.
+See [signature setup](signatures.md#built-in-rules) for applications under
+`/home` or using release symlinks. Set `--signatures ""` to turn signatures off.
 
 Gate mode is disabled when `--gate-socket` is omitted. Existing agent installs
 therefore retain block/unblock-only behavior until explicitly changed.

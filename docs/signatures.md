@@ -25,11 +25,46 @@ WordPress, foreign-script, `phpinfo`, and traversal probes are **blocked**
 without a ban.
 
 Laravel loads it automatically (`LARAVEL_WAF_SIGNATURES_BUILTIN=true`). Point
-the gate at the installed copy so a `composer update` refreshes both layers:
+the gate at the installed copy once so Composer package updates refresh both layers:
 
 ```text
---signatures /etc/laravel-waf/rules.d,<application-root>/vendor/billingserv/laravel-waf/resources/rules/core.json
+--signatures <application-root>/vendor/billingserv/laravel-waf/resources/rules/core.json,/etc/laravel-waf/rules.d
 ```
+
+When Composer installs a newer package revision, both layers pick up its
+`core.json` within their reload interval (5 seconds by default). No rule copy,
+Artisan command, signal, Nginx change, or agent rebuild/restart is needed for
+subsequent signature updates. Add new packaged signatures to `core.json`.
+`composer install` installs the revision in the application's lock file; a
+GitHub push takes effect after that newer revision is actually installed.
+
+The standalone agent needs the application path during its initial setup.
+The [gate service example](../agent/deploy/lwafd-gate.conf.example) shows this
+configuration. Do not point it at a copied bundle in `/etc`: that copy cannot
+follow Composer updates.
+
+For applications under `/home`, `ProtectHome=true` hides the package from the
+agent. In its systemd service or drop-in, expose the stable application
+directory read-only:
+
+```ini
+[Service]
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/my-application
+```
+
+Replace the path with the application's actual directory. Other home directories
+remain hidden ([systemd sandbox documentation](https://www.freedesktop.org/software/systemd/man/252/systemd.exec.html#ProtectHome=)).
+Bind a stable ancestor of `vendor`, rather than the rule file or package
+directory: Composer replaces those directories. For deployments that replace a
+`current` symlink, bind its stable parent containing both the symlink and
+release directories. Keep `--signatures` pointing through `current`. Apply this
+service configuration once, with `systemctl daemon-reload` and a service restart.
+Applications outside protected home directories do not need this exception.
+The service user must also be able to traverse the application directories and
+read the rule file. For a private application group, add
+`SupplementaryGroups=my-application-group` to the service. Keep Composer's
+replacement files readable by that group.
 
 ## Adding a rule during an incident
 

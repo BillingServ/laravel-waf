@@ -1,3 +1,4 @@
 [Service]
 ExecStart=
-ExecStart=/usr/local/bin/lwafd --socket /run/laravel-waf/agent.sock --socket-group www-data --secret-file /etc/laravel-waf/agent.secret --metrics-ingest-socket /run/laravel-waf/metrics.sock --metrics-ingest-socket-group www-data --gate-socket /run/laravel-waf/gate.sock --gate-socket-group www-data --gate-threshold 600 --gate-window 60s --challenge-cookie laravel_waf_challenge
+ExecStart=/usr/local/bin/lwafd --socket /run/laravel-waf/agent.sock --socket-group www-data --secret-file /etc/laravel-waf/agent.secret --metrics-ingest-socket /run/laravel-waf/metrics.sock --metrics-ingest-socket-group www-data --gate-socket /run/laravel-waf/gate.sock --gate-socket-group www-data --gate-threshold 600 --gate-window 60s --challenge-cookie laravel_waf_challenge --signatures /etc/laravel-waf/rules.d,/var/www/app/vendor/billingserv/laravel-waf/resources/rules/core.json
+ExecReload=/bin/kill -HUP $MAINPID

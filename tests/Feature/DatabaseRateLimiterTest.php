@@ -6,9 +6,14 @@ use BillingServ\LaravelWaf\Http\Middleware\WafProtection;
 use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Support\RateLimiter;
 use BillingServ\LaravelWaf\Tests\TestCase;
+use Illuminate\Auth\Events\Login;
+use Illuminate\Auth\GenericUser;
+use Illuminate\Cache\DatabaseStore;
 use Illuminate\Cache\RateLimiter as LaravelRateLimiter;
+use Illuminate\Cache\Repository;
 use Illuminate\Database\Events\TransactionCommitted;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
@@ -51,6 +56,83 @@ final class DatabaseRateLimiterTest extends TestCase
             $table->integer('expiration');
         });
         $this->freezeTime();
+    }
+
+    public function test_livewire_login_clears_both_windows_and_flexible_metadata_in_one_delete(): void
+    {
+        app()->instance('request', Request::create('/livewire/update', 'POST', ['components' => []], [], [], [
+            'REMOTE_ADDR' => '203.0.113.10',
+        ]));
+        $limiter = app(RateLimiter::class);
+        $identityKey = RateLimitKey::login('203.0.113.10', 'user@example.test');
+        $ipKey = RateLimitKey::login('203.0.113.10');
+        $limiter->hit($identityKey, 60);
+        $limiter->hit($ipKey, 60);
+        $limiter->hit('unrelated', 60);
+        if (method_exists(DatabaseStore::class, 'forgetMany') && defined(Repository::class.'::FLEXIBLE_CREATED_KEY_PREFIX')) {
+            cache()->put(Repository::FLEXIBLE_CREATED_KEY_PREFIX.$identityKey, 123, 60);
+            cache()->put(Repository::FLEXIBLE_CREATED_KEY_PREFIX.$identityKey.':timer', 123, 60);
+        }
+        DB::enableQueryLog();
+
+        event(new Login('web', new GenericUser(['id' => 1, 'email' => 'user@example.test']), false));
+
+        $queries = DB::getQueryLog();
+        self::assertCount(1, $queries);
+        self::assertStringStartsWith('delete', $queries[0]['query']);
+        self::assertSame(2, DB::table('cache')->count());
+        self::assertSame(1, $limiter->attempts('unrelated'));
+        self::assertNotNull(cache()->get('unrelated:timer'));
+    }
+
+    public function test_successful_login_does_not_read_or_reserve_missing_database_counters(): void
+    {
+        app()->instance('request', Request::create('/livewire/update', 'POST', [], [], [], [
+            'REMOTE_ADDR' => '203.0.113.10',
+        ]));
+        DB::enableQueryLog();
+
+        event(new Login('web', new GenericUser(['id' => 1, 'email' => 'user@example.test']), false));
+
+        $queries = DB::getQueryLog();
+        self::assertCount(1, $queries);
+        self::assertStringStartsWith('delete', $queries[0]['query']);
+        self::assertSame(0, DB::table('cache')->count());
+    }
+
+    public function test_bulk_clear_keeps_custom_database_store_forget_behavior(): void
+    {
+        $store = new class(DB::connection(), 'cache', 'custom-prefix:') extends DatabaseStore {
+            /** @var array<int, string> */
+            public array $forgotten = [];
+
+            public function forget($key)
+            {
+                $this->forgotten[] = $key;
+
+                return parent::forget($key);
+            }
+        };
+        app('cache')->extend('custom-login', static fn () => new Repository($store));
+        config()->set('cache.stores.custom-login', ['driver' => 'custom-login']);
+        config()->set('cache.limiter', 'custom-login');
+        $limiter = app(RateLimiter::class);
+        $limiter->hit('counter', 60);
+
+        $limiter->clearMany(['counter', 'counter']);
+
+        self::assertSame(['counter', 'counter:timer'], $store->forgotten);
+        self::assertSame(0, $limiter->attempts('counter'));
+        self::assertNull(app('cache')->store('custom-login')->get('counter:timer'));
+    }
+
+    public function test_bulk_clear_with_no_keys_does_not_query_the_database(): void
+    {
+        DB::enableQueryLog();
+
+        app(RateLimiter::class)->clearMany([]);
+
+        self::assertSame([], DB::getQueryLog());
     }
 
     public function test_warm_ddos_buckets_share_one_read_and_one_commit(): void

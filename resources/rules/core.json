@@ -1,0 +1,144 @@
+{
+    "version": 1,
+    "rules": [
+        {
+            "id": "php-cgi-arg-injection",
+            "description": "PHP-CGI argument injection (CVE-2012-1823, CVE-2024-4577): -d ini overrides in the query string.",
+            "action": "ban",
+            "ttl": 86400,
+            "conditions": [
+                {
+                    "target": "query",
+                    "op": "contains",
+                    "values": ["allow_url_include", "auto_prepend_file", "auto_append_file", "cgi.force_redirect", "cgi.redirect_status_env"]
+                }
+            ]
+        },
+        {
+            "id": "php-cgi-binary",
+            "description": "Direct requests for the PHP-CGI binary.",
+            "action": "ban",
+            "ttl": 86400,
+            "conditions": [
+                {"target": "path", "op": "contains", "values": ["/php-cgi/", "php-cgi.exe"]}
+            ]
+        },
+        {
+            "id": "php-stream-wrapper",
+            "description": "PHP stream wrappers in the request line.",
+            "action": "ban",
+            "ttl": 86400,
+            "conditions": [
+                {"target": ["path", "query"], "op": "contains", "values": ["php://", "phar://", "expect://"]}
+            ]
+        },
+        {
+            "id": "proc-self-probe",
+            "description": "Process environment and command-line disclosure probes.",
+            "action": "ban",
+            "ttl": 86400,
+            "conditions": [
+                {"target": ["path", "query"], "op": "contains", "values": ["/proc/self/", "proc/self/environ"]}
+            ]
+        },
+        {
+            "id": "system-file-probe",
+            "description": "Requests naming well-known operating-system files.",
+            "action": "ban",
+            "ttl": 86400,
+            "conditions": [
+                {"target": ["path", "query"], "op": "contains", "values": ["/etc/passwd", "/etc/shadow", "win.ini", "boot.ini"]}
+            ]
+        },
+        {
+            "id": "shell-command-in-url",
+            "description": "Shell command substitution or download-and-execute payloads.",
+            "action": "ban",
+            "ttl": 86400,
+            "conditions": [
+                {
+                    "target": ["path", "query"],
+                    "op": "regex",
+                    "value": "\\$\\(\\s*(?:wget|curl|bash|sh|busybox|nc|chmod|tftp)\\b|`\\s*(?:wget|curl|bash|sh|busybox|nc)\\b|(?:wget|curl)\\s+\\S+.*\\|\\s*(?:ba)?sh\\b"
+                }
+            ]
+        },
+        {
+            "id": "env-vcs-probe",
+            "description": "Environment, credential, and version-control files.",
+            "action": "ban",
+            "ttl": 86400,
+            "conditions": [
+                {"target": "path", "op": "regex", "value": "(?:^|/)\\.(?:env|git|svn|hg|aws|ssh|docker|htpasswd|htaccess|ds_store)(?:$|[/._-])"}
+            ]
+        },
+        {
+            "id": "cgi-bin-probe",
+            "description": "CGI directory probes; Laravel applications do not serve /cgi-bin.",
+            "action": "ban",
+            "ttl": 86400,
+            "conditions": [
+                {"target": "path", "op": "regex", "value": "^/+cgi-bin(?:/|$)"}
+            ]
+        },
+        {
+            "id": "vite-dev-probe",
+            "description": "Vite development-server file-system probes; never valid in production.",
+            "action": "ban",
+            "ttl": 86400,
+            "conditions": [
+                {"target": "path", "op": "regex", "value": "^/+(?:@fs/|__vite)"}
+            ]
+        },
+        {
+            "id": "exploit-scanner-ua",
+            "description": "User agents of exploit and vulnerability scanners.",
+            "action": "ban",
+            "ttl": 86400,
+            "conditions": [
+                {
+                    "target": "user_agent",
+                    "op": "contains",
+                    "values": [
+                        "libredtail", "r00ts3c", "owned-you", "zgrab", "masscan", "nuclei", "sqlmap", "nikto",
+                        "nmap scripting engine", "wpscan", "dirbuster", "gobuster", "feroxbuster",
+                        "fuzz faster u fool", "acunetix", "netsparker", "openvas", "jaeles", "zmeu", "morfeus",
+                        "l9explore", "l9tcpid", "hello, world"
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "path-traversal",
+            "description": "Repeated directory traversal in the request line.",
+            "action": "block",
+            "conditions": [
+                {"target": ["path", "query"], "op": "regex", "value": "(?:\\.\\.;?[/\\\\]){2,}|\\.\\.\\.\\.//"}
+            ]
+        },
+        {
+            "id": "wordpress-probe",
+            "description": "WordPress endpoints requested from a Laravel application.",
+            "action": "block",
+            "conditions": [
+                {"target": "path", "op": "regex", "value": "(?:^|/)(?:wp-login\\.php|xmlrpc\\.php|xmrlpc\\.php|wp-config\\.php|wlwmanifest\\.xml|wp-(?:admin|content|includes)/)"}
+            ]
+        },
+        {
+            "id": "foreign-script-probe",
+            "description": "Script extensions that a Laravel application never serves.",
+            "action": "block",
+            "conditions": [
+                {"target": "path", "op": "regex", "value": "\\.(?:cgi|pl|asp|aspx|jsp|jspa|do|action|exe|dll|sh)$"}
+            ]
+        },
+        {
+            "id": "phpinfo-probe",
+            "description": "phpinfo() disclosure probes.",
+            "action": "block",
+            "conditions": [
+                {"target": "path", "op": "contains", "value": "phpinfo"}
+            ]
+        }
+    ]
+}

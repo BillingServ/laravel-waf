@@ -7,6 +7,8 @@ use BillingServ\LaravelWaf\Http\Responses\BlockedResponse;
 use BillingServ\LaravelWaf\Security\BehaviorTracker;
 use BillingServ\LaravelWaf\Security\Finding;
 use BillingServ\LaravelWaf\Security\RequestRuleEngine;
+use BillingServ\LaravelWaf\Security\Rules\SignatureRule;
+use BillingServ\LaravelWaf\Security\Signatures\SignatureException;
 use BillingServ\LaravelWaf\Support\AgentBlocker;
 use BillingServ\LaravelWaf\Support\ChallengeTokenManager;
 use BillingServ\LaravelWaf\Support\InternalEndpoint;
@@ -61,6 +63,10 @@ final class RequestInspection
         if (config('laravel-waf.rules.enabled', true)) {
             try {
                 $findings = array_merge($findings, $this->engine->inspect($request));
+                // Explicit signature decisions must survive the shared finding
+                // budget even when a behavior observation was collected first.
+                usort($findings, static fn (Finding $left, Finding $right): int =>
+                    (int) ($right->category === 'signature') <=> (int) ($left->category === 'signature'));
             } catch (Throwable $exception) {
                 $this->metrics->error('request_inspection');
                 $this->warning('Laravel WAF request inspection failed.', [
@@ -68,7 +74,7 @@ final class RequestInspection
                     'route' => $route,
                 ]);
 
-                if (config('laravel-waf.rules.fail_mode', 'open') === 'closed') {
+                if ($exception instanceof SignatureException || config('laravel-waf.rules.fail_mode', 'open') === 'closed') {
                     return $this->unavailable($request);
                 }
             }
@@ -94,20 +100,13 @@ final class RequestInspection
             }
         }
 
+        foreach (SignatureRule::takeLogged($request) as $logged) {
+            $this->report($logged);
+        }
+
         $actionable = null;
         foreach ($findings as $finding) {
-            $action = $this->action($finding);
-            $this->metrics->finding($finding, $action);
-            $this->log($finding, $action);
-            $this->notifier->notify($finding);
-            if ($action !== 'log' && config('laravel-waf.agent.auto_block_on_finding', false)) {
-                $this->agentBlocker->block(
-                    $finding->ip,
-                    (int) config('laravel-waf.agent.block_ttl_seconds', 900),
-                    'waf_'.$finding->category,
-                    $finding->category,
-                );
-            }
+            $action = $this->report($finding);
 
             if ($action !== 'log'
                 && !($action === 'challenge' && $challengePassed)
@@ -136,8 +135,41 @@ final class RequestInspection
         return $this->blocked($request);
     }
 
+    /**
+     * Records, logs, notifies, and (when configured) bans for one finding,
+     * then returns its effective action: reject, challenge, or log.
+     */
+    public function report(Finding $finding): string
+    {
+        $action = $this->action($finding);
+        $this->metrics->finding($finding, $action);
+        $this->log($finding, $action);
+        $this->notifier->notify($finding);
+
+        if ($finding->banTtlSeconds > 0) {
+            // A signature's ban is explicit operator intent and does not
+            // depend on the generic auto-block switch.
+            $this->agentBlocker->block($finding->ip, $finding->banTtlSeconds, 'sig:'.$finding->rule, 'signature');
+        } elseif ($action !== 'log'
+            && $finding->action === null
+            && config('laravel-waf.agent.auto_block_on_finding', false)) {
+            $this->agentBlocker->block(
+                $finding->ip,
+                (int) config('laravel-waf.agent.block_ttl_seconds', 900),
+                'waf_'.$finding->category,
+                $finding->category,
+            );
+        }
+
+        return $action;
+    }
+
     private function action(Finding $finding): string
     {
+        if ($finding->action !== null) {
+            return $finding->action;
+        }
+
         $configured = $finding->category === 'behavior'
             ? config('laravel-waf.behavior.action')
             : config('laravel-waf.rules.categories.'.$finding->category.'.action');
@@ -155,7 +187,7 @@ final class RequestInspection
         return BlockedResponse::make($request, $status);
     }
 
-    private function unavailable(Request $request): Response
+    public function unavailable(Request $request): Response
     {
         $headers = [
             'Cache-Control' => 'no-store',

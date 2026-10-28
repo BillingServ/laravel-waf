@@ -26,11 +26,13 @@ import (
 	"github.com/BillingServ/laravel-waf/agent/internal/metrics"
 	"github.com/BillingServ/laravel-waf/agent/internal/protocol"
 	"github.com/BillingServ/laravel-waf/agent/internal/server"
+	"github.com/BillingServ/laravel-waf/agent/internal/signatures"
 )
 
 const (
 	defaultControlSecretFile = "/etc/laravel-waf/agent.secret"
 	defaultBlockStateFile    = "/var/lib/laravel-waf/blocks.json"
+	defaultSignaturePaths    = "/etc/laravel-waf/rules.d"
 )
 
 var (
@@ -86,6 +88,8 @@ func runDaemon() {
 		cookieName       = flag.String("challenge-cookie", "laravel_waf_challenge", "Laravel WAF pass cookie name")
 		cookieSecretFile = flag.String("challenge-secret-file", "", "optional gate cookie-secret override; defaults to secret-file")
 		gateTokenFile    = flag.String("gate-token-file", "", "optional gate marker-token override; defaults to secret-file")
+		signaturePaths   = flag.String("signatures", defaultSignaturePaths, "comma-separated signature files or directories of *.json files evaluated by the gate; empty disables signatures")
+		signatureReload  = flag.Duration("signatures-reload-interval", 5*time.Second, "interval used to pick up changed signature files; SIGHUP reloads immediately")
 	)
 	flag.Usage = func() {
 		output := flag.CommandLine.Output()
@@ -94,6 +98,8 @@ func runDaemon() {
 		_, _ = fmt.Fprintf(output, "  %s add-ip [options] <ip> <duration>\n", programName)
 		_, _ = fmt.Fprintf(output, "  %s remove-ip [options] <ip>\n", programName)
 		_, _ = fmt.Fprintf(output, "  %s list-ip [options]\n", programName)
+		_, _ = fmt.Fprintf(output, "  %s check-signatures <file-or-directory>...\n", programName)
+		_, _ = fmt.Fprintf(output, "  %s match-signatures [options] <uri>\n", programName)
 		_, _ = fmt.Fprintln(output, "\nDaemon options:")
 		flag.PrintDefaults()
 	}
@@ -245,6 +251,17 @@ func runDaemon() {
 		if err != nil {
 			logger.Fatal(err)
 		}
+		var signatureSource gate.SignatureSource
+		if paths := commaSeparated(*signaturePaths); len(paths) > 0 {
+			if *signatureReload < time.Second {
+				logger.Fatal("signature reload interval must be at least 1s")
+			}
+			loader := signatures.NewLoader(paths)
+			reloadSignatures(loader, registry, logger, "")
+			go watchSignatures(ctx, loader, *signatureReload, registry, logger)
+			signatureSource = loader
+		}
+
 		gateHandler, err := gate.NewHandler(gate.Config{
 			Threshold:       *gateLimit,
 			ClientThreshold: *gateClientLimit,
@@ -255,6 +272,7 @@ func runDaemon() {
 			MarkerToken:     string(gateToken),
 			BypassPrefixes:  commaSeparated(*gateBypass),
 			Methods:         commaSeparated(*gateMethods),
+			Signatures:      signatureSource,
 		}, registry, decisionServer)
 		if err != nil {
 			logger.Fatal(err)
@@ -307,6 +325,12 @@ func runControlCommand(args []string, stdout, stderr io.Writer) (bool, error) {
 
 	if args[0] == "list-ip" || args[0] == "list-ips" {
 		return runListCommand(args[1:], stdout, stderr)
+	}
+	if args[0] == "check-signatures" {
+		return true, runCheckSignatures(args[1:], stdout, stderr)
+	}
+	if args[0] == "match-signatures" {
+		return true, runMatchSignatures(args[1:], stdout, stderr)
 	}
 	if args[0] != "add-ip" && args[0] != "remove-ip" {
 		return false, nil
@@ -442,6 +466,132 @@ func runListCommand(args []string, stdout, stderr io.Writer) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// runCheckSignatures validates signature files without a running daemon, so
+// a change can be checked before it is copied into the live directory.
+func runCheckSignatures(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("check-signatures", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "Usage: %s check-signatures <file-or-directory>...\n", programName)
+	}
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() == 0 {
+		flags.Usage()
+
+		return fmt.Errorf("at least one signature path is required")
+	}
+
+	result := signatures.NewLoader(flags.Args()).Reload()
+	for _, err := range result.Errors {
+		_, _ = fmt.Fprintf(stderr, "error: %v\n", err)
+	}
+	if len(result.Errors) > 0 {
+		return fmt.Errorf("%d signature error(s)", len(result.Errors))
+	}
+	_, _ = fmt.Fprintf(stdout, "ok: %d file(s), %d active rule(s)\n", result.Files, result.Rules)
+
+	return nil
+}
+
+// runMatchSignatures reports which rule a hypothetical request would hit.
+func runMatchSignatures(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("match-signatures", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	paths := flags.String("signatures", defaultSignaturePaths, "comma-separated signature files or directories")
+	method := flags.String("method", http.MethodGet, "request method")
+	userAgent := flags.String("user-agent", "", "User-Agent header value")
+	flags.Usage = func() {
+		_, _ = fmt.Fprintf(stderr, "Usage: %s match-signatures [options] <uri>\n\n", programName)
+		flags.PrintDefaults()
+	}
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		flags.Usage()
+
+		return fmt.Errorf("exactly one URI is required")
+	}
+
+	loader := signatures.NewLoader(commaSeparated(*paths))
+	result := loader.Reload()
+	for _, err := range result.Errors {
+		_, _ = fmt.Fprintf(stderr, "warning: %v\n", err)
+	}
+
+	header := http.Header{}
+	if *userAgent != "" {
+		header.Set("User-Agent", *userAgent)
+	}
+	rule, logged := loader.Current().Match(signatures.Request{Method: *method, URI: flags.Arg(0), Header: header})
+	for _, match := range logged {
+		_, _ = fmt.Fprintf(stdout, "log\t%s\n", match.ID)
+	}
+	if rule == nil {
+		_, _ = fmt.Fprintln(stdout, "no blocking signature matched")
+
+		return nil
+	}
+	if rule.Action == signatures.ActionBan {
+		_, _ = fmt.Fprintf(stdout, "ban\t%s\t%s\n", rule.ID, (time.Duration(rule.TTLSeconds) * time.Second).String())
+	} else {
+		_, _ = fmt.Fprintf(stdout, "%s\t%s\n", rule.Action, rule.ID)
+	}
+
+	return nil
+}
+
+func reloadSignatures(loader *signatures.Loader, registry *metrics.Registry, logger *log.Logger, previousErrors string) string {
+	result := loader.Reload()
+	messages := make([]string, 0, len(result.Errors))
+	for _, err := range result.Errors {
+		messages = append(messages, err.Error())
+	}
+	current := strings.Join(messages, "; ")
+
+	outcome := "unchanged"
+	switch {
+	case len(result.Errors) > 0:
+		outcome = "error"
+	case result.Changed:
+		outcome = "loaded"
+	}
+	registry.SignatureReload(outcome, result.Rules)
+
+	// Persistent errors are logged once, not on every interval.
+	if current != "" && current != previousErrors {
+		logger.Printf("signature reload: keeping last valid rules after error(s): %s", current)
+	}
+	if result.Changed && current == "" {
+		logger.Printf("signatures loaded: %d file(s), %d active rule(s)", result.Files, result.Rules)
+	}
+
+	return current
+}
+
+func watchSignatures(ctx context.Context, loader *signatures.Loader, interval time.Duration, registry *metrics.Registry, logger *log.Logger) {
+	hangup := make(chan os.Signal, 1)
+	signal.Notify(hangup, syscall.SIGHUP)
+	defer signal.Stop(hangup)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	lastErrors := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-hangup:
+			lastErrors = ""
+		}
+		lastErrors = reloadSignatures(loader, registry, logger, lastErrors)
+	}
 }
 
 func expiresIn(expiresAt int64) string {

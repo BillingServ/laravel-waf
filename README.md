@@ -10,6 +10,8 @@ upstream provider → iptables/ipset → Nginx → Laravel WAF → application
 
 ## Features
 
+- Hot-reloadable signature files (virtual patches) enforced by both the Go gate and Laravel; add a rule on the server without deploying.
+- Built-in scanner and exploit signatures (PHP-CGI argument injection, `/proc/self`, `.env`, `/cgi-bin`, exploit-scanner user agents) that ban the source IP.
 - Detects common XSS, SQL injection, remote file inclusion, and local file inclusion patterns.
 - Detects command, template, NoSQL, LDAP, CRLF, and SSRF input patterns.
 - Applies configurable request actions: reject, challenge, or log.
@@ -97,6 +99,7 @@ preset value, so remove the redundant entries when adopting the preset and
 keep only deliberate exceptions. Published config remains available for
 application-specific tuning.
 
+- [`docs/signatures.md`](docs/signatures.md): runtime signature files, built-in scanner rules, and incident workflow.
 - [`docs/request-rules.md`](docs/request-rules.md): request rules, actions, exclusions, and GeoIP.
 - [`docs/login-protection.md`](docs/login-protection.md): login middleware and authentication events.
 - [`docs/notifications.md`](docs/notifications.md): email, Slack, and custom notification sinks.

@@ -48,6 +48,34 @@ final class RateLimiter
     }
 
     /** @param array<int, string> $keys */
+    public function clearMany(array $keys): void
+    {
+        if ($keys === []) {
+            return;
+        }
+
+        $cache = $this->repository();
+        $limiter = new LaravelRateLimiter($cache);
+        $keys = array_values(array_unique(array_map($limiter->cleanRateLimiterKey(...), $keys)));
+        $store = $cache->getStore();
+
+        // Custom stores may override forget(), so only batch the native store.
+        if ($store::class === DatabaseStore::class) {
+            $cacheKeys = array_values(array_unique(array_merge(
+                $keys,
+                array_map(static fn (string $key): string => $key.':timer', $keys),
+            )));
+            (new DatabaseCounterStore($store))->forgetCounters($cacheKeys);
+
+            return;
+        }
+
+        foreach ($keys as $key) {
+            $limiter->clear($key);
+        }
+    }
+
+    /** @param array<int, string> $keys */
     public function hitMany(array $keys, int $decaySeconds): void
     {
         $this->batch($keys, static function (LaravelRateLimiter $limiter) use ($keys, $decaySeconds): void {

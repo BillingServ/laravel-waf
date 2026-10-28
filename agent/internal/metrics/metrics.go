@@ -15,6 +15,7 @@ const (
 	metricCounter        = "counter"
 	metricHistogram      = "histogram"
 	maxApplicationSeries = 4096
+	maxSignatureSeries   = 1024
 )
 
 type applicationMetricSchema struct {
@@ -96,6 +97,9 @@ type Registry struct {
 	operations            map[counterKey]uint64
 	gate                  map[counterKey]uint64
 	metricEvents          map[counterKey]uint64
+	signatures            map[counterKey]uint64
+	signatureReloads      map[counterKey]uint64
+	signatureRules        int
 	applicationCounters   map[string]*applicationCounter
 	applicationHistograms map[string]*applicationHistogram
 	applicationSeries     int
@@ -109,6 +113,8 @@ func NewRegistry(instance, version string) *Registry {
 		operations:            make(map[counterKey]uint64),
 		gate:                  make(map[counterKey]uint64),
 		metricEvents:          make(map[counterKey]uint64),
+		signatures:            make(map[counterKey]uint64),
+		signatureReloads:      make(map[counterKey]uint64),
 		applicationCounters:   make(map[string]*applicationCounter),
 		applicationHistograms: make(map[string]*applicationHistogram),
 	}
@@ -135,6 +141,26 @@ func (r *Registry) Operation(operation, outcome, family string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.operations[counterKey{Name: "operations", Action: operation, Outcome: outcome, Family: family}]++
+}
+
+// Signature counts one signature match. Rule IDs are operator-defined, so the
+// number of distinct series is capped and the remainder is folded together.
+func (r *Registry) Signature(rule, action string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	key := counterKey{Name: "signatures", Action: action, Outcome: rule}
+	if _, exists := r.signatures[key]; !exists && len(r.signatures) >= maxSignatureSeries {
+		key.Outcome = "other"
+	}
+	r.signatures[key]++
+}
+
+func (r *Registry) SignatureReload(outcome string, rules int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.signatureReloads[counterKey{Name: "signature_reloads", Outcome: outcome}]++
+	r.signatureRules = rules
 }
 
 func (r *Registry) MetricEvent(outcome string) {
@@ -271,6 +297,34 @@ func (r *Registry) render() string {
 			escape(r.instance), escape(key.Outcome), r.gate[key],
 		))
 	}
+
+	lines = append(lines,
+		"# HELP laravel_waf_agent_signature_matches_total Requests matched by pre-application signatures.",
+		"# TYPE laravel_waf_agent_signature_matches_total counter",
+	)
+	for _, key := range sortedCounterKeys(r.signatures) {
+		lines = append(lines, fmt.Sprintf(
+			`laravel_waf_agent_signature_matches_total{instance="%s",rule="%s",action="%s"} %d`,
+			escape(r.instance), escape(key.Outcome), escape(key.Action), r.signatures[key],
+		))
+	}
+
+	lines = append(lines,
+		"# HELP laravel_waf_agent_signature_reloads_total Signature file reloads by outcome.",
+		"# TYPE laravel_waf_agent_signature_reloads_total counter",
+	)
+	for _, key := range sortedCounterKeys(r.signatureReloads) {
+		lines = append(lines, fmt.Sprintf(
+			`laravel_waf_agent_signature_reloads_total{instance="%s",outcome="%s"} %d`,
+			escape(r.instance), escape(key.Outcome), r.signatureReloads[key],
+		))
+	}
+
+	lines = append(lines,
+		"# HELP laravel_waf_agent_signature_rules Active pre-application signature rules.",
+		"# TYPE laravel_waf_agent_signature_rules gauge",
+		fmt.Sprintf(`laravel_waf_agent_signature_rules{instance="%s"} %d`, escape(r.instance), r.signatureRules),
+	)
 
 	lines = append(lines,
 		"# HELP laravel_waf_agent_metric_events_total Laravel metric events received by LWAFD.",

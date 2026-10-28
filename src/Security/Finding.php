@@ -13,6 +13,10 @@ final readonly class Finding
         public string $ip,
         public string $route,
         public string $method,
+        // A rule that carries its own decision (signatures) sets these;
+        // null defers to the category/global action configuration.
+        public ?string $action = null,
+        public int $banTtlSeconds = 0,
     ) {
     }
 

@@ -156,6 +156,21 @@ return [
         ],
     ],
 
+    // Operator-managed signatures (virtual patches) loaded at runtime from
+    // JSON files. Edit a file on the server and every PHP worker picks it up
+    // within reload_interval_seconds; no deployment is required. The same
+    // files are enforced before PHP by LWAFD's gate (--signatures).
+    'signatures' => [
+        'enabled' => env('LARAVEL_WAF_SIGNATURES_ENABLED', true),
+        // The package's resources/rules/core.json scanner and exploit rules.
+        'builtin' => env('LARAVEL_WAF_SIGNATURES_BUILTIN', true),
+        'paths' => array_values(array_filter(array_map(
+            static fn (string $path): string => trim($path),
+            explode(',', (string) env('LARAVEL_WAF_SIGNATURE_PATHS', '/etc/laravel-waf/rules.d')),
+        ), static fn (string $path): bool => $path !== '')),
+        'reload_interval_seconds' => (int) env('LARAVEL_WAF_SIGNATURES_RELOAD_INTERVAL', 5),
+    ],
+
     // Route names are the stable key for application-specific request policy.
     // An empty map leaves this feature inactive even when the rule is enabled.
     'policies' => [

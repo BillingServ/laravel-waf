@@ -12,6 +12,7 @@ use BillingServ\LaravelWaf\Contracts\NotificationSink;
 use BillingServ\LaravelWaf\Http\Middleware\DdosProtection;
 use BillingServ\LaravelWaf\Http\Middleware\LoginProtection;
 use BillingServ\LaravelWaf\Http\Middleware\RequestInspection;
+use BillingServ\LaravelWaf\Http\Middleware\SignatureProtection;
 use BillingServ\LaravelWaf\Http\Middleware\WafProtection;
 use BillingServ\LaravelWaf\Http\Responses\AltchaChallengeResponder;
 use BillingServ\LaravelWaf\Http\Responses\DefaultChallengeResponder;
@@ -28,6 +29,8 @@ use BillingServ\LaravelWaf\Security\Rules\NoSqlInjectionRule;
 use BillingServ\LaravelWaf\Security\Rules\RfiRule;
 use BillingServ\LaravelWaf\Security\Rules\RoutePolicyRule;
 use BillingServ\LaravelWaf\Security\Rules\SensitivePathRule;
+use BillingServ\LaravelWaf\Security\Rules\SignatureRule;
+use BillingServ\LaravelWaf\Security\Signatures\SignatureLoader;
 use BillingServ\LaravelWaf\Security\Rules\SqlInjectionRule;
 use BillingServ\LaravelWaf\Security\Rules\SsrfRule;
 use BillingServ\LaravelWaf\Security\Rules\TemplateInjectionRule;
@@ -109,9 +112,26 @@ final class WafServiceProvider extends ServiceProvider
             }
         });
 
+        $this->app->singleton(SignatureLoader::class, fn ($app): SignatureLoader => new SignatureLoader(
+            $app->make(MetricsRecorder::class),
+            $app->make(LoggerInterface::class),
+            $app['cache']->store(),
+        ));
+
+        $this->app->singleton(SignatureRule::class, fn ($app): SignatureRule => new SignatureRule(
+            $app->make(SignatureLoader::class),
+            $app->make(RequestInputCollector::class),
+        ));
+
         $this->app->singleton(RequestRuleEngine::class, function ($app): RequestRuleEngine {
             $inputs = $app->make(RequestInputCollector::class);
             $rules = [];
+
+            // Operator signatures run first: they are cheap, high-confidence,
+            // and carry their own block or ban decision.
+            if ((bool) config('laravel-waf.signatures.enabled', true)) {
+                $rules[] = $app->make(SignatureRule::class);
+            }
 
             $category = static fn (string $name): array => (array) config('laravel-waf.rules.categories.'.$name, []);
             if ((bool) config('laravel-waf.rules.categories.policy.enabled', true)) {
@@ -262,6 +282,7 @@ final class WafServiceProvider extends ServiceProvider
             $router->aliasMiddleware('laravel-waf.inspect', RequestInspection::class);
             $router->aliasMiddleware('laravel-waf.ddos', DdosProtection::class);
             $router->aliasMiddleware('laravel-waf.login', LoginProtection::class);
+            $router->aliasMiddleware('laravel-waf.signatures', SignatureProtection::class);
         }
 
         if ($this->app->bound('events')) {

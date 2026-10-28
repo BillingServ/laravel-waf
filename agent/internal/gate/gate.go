@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/BillingServ/laravel-waf/agent/internal/metrics"
+	"github.com/BillingServ/laravel-waf/agent/internal/signatures"
 )
 
 const (
@@ -31,6 +32,11 @@ type Blocker interface {
 	Block(context.Context, net.IP, int, string) error
 }
 
+// SignatureSource supplies the current, hot-reloadable signature set.
+type SignatureSource interface {
+	Current() *signatures.Set
+}
+
 type Config struct {
 	Threshold       uint64
 	ClientThreshold uint64
@@ -41,6 +47,7 @@ type Config struct {
 	MarkerToken     string
 	BypassPrefixes  []string
 	Methods         []string
+	Signatures      SignatureSource
 }
 
 type Handler struct {
@@ -49,12 +56,14 @@ type Handler struct {
 	blocker Blocker
 	now     func() time.Time
 
-	mu            sync.Mutex
-	windowStarted time.Time
-	requests      uint64
-	clients       map[string]clientWindow
-	clientPaths   map[string]uint64
-	blockedUntil  map[string]time.Time
+	mu                 sync.Mutex
+	windowStarted      time.Time
+	requests           uint64
+	clients            map[string]clientWindow
+	clientPaths        map[string]uint64
+	blockedUntil       map[string]time.Time
+	signatureAttempts  map[string]time.Time
+	signatureCleanedAt time.Time
 }
 
 type clientWindow struct {
@@ -83,6 +92,9 @@ func NewHandler(config Config, registry *metrics.Registry, blocker Blocker) (*Ha
 	}
 	if config.Window < time.Second || config.Window > time.Hour {
 		return nil, &configError{"window must be between 1s and 1h"}
+	}
+	if config.Signatures != nil && blocker == nil {
+		return nil, &configError{"signature bans require a blocker"}
 	}
 	if config.ClientThreshold > 0 {
 		if config.ClientThreshold > ^uint64(0)/2 {
@@ -131,13 +143,14 @@ func NewHandler(config Config, registry *metrics.Registry, blocker Blocker) (*Ha
 	config.BypassPrefixes = bypassPrefixes
 
 	return &Handler{
-		config:       config,
-		metrics:      registry,
-		blocker:      blocker,
-		now:          time.Now,
-		clients:      make(map[string]clientWindow),
-		clientPaths:  make(map[string]uint64),
-		blockedUntil: make(map[string]time.Time),
+		config:            config,
+		metrics:           registry,
+		blocker:           blocker,
+		now:               time.Now,
+		clients:           make(map[string]clientWindow),
+		clientPaths:       make(map[string]uint64),
+		blockedUntil:      make(map[string]time.Time),
+		signatureAttempts: make(map[string]time.Time),
 	}, nil
 }
 
@@ -154,7 +167,16 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	originalPath := requestPath(request.Header.Get(originalURIHeader))
+	originalURI := request.Header.Get(originalURIHeader)
+	now := h.now()
+
+	// Signatures run before URI parsing, bypasses, and the pass cookie: a
+	// malformed URI or a verified browser must not carry an exploit through.
+	if validRawURI(originalURI) && h.signatureDenied(response, request, ip, originalURI, now) {
+		return
+	}
+
+	originalPath := requestPath(originalURI)
 	if originalPath == "" {
 		h.metrics.Gate("invalid")
 		http.Error(response, "invalid original URI", http.StatusBadRequest)
@@ -167,7 +189,6 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	now := h.now()
 	passed := h.passed(request, ip, now)
 	hit := h.hit(now, ip.String(), originalPath, !passed)
 	if hit.alreadyBlocked {
@@ -268,19 +289,118 @@ func (h *Handler) hit(now time.Time, ip, path string, trackClient bool) hitResul
 	return result
 }
 
+// signatureDenied evaluates the request line and headers against the current
+// signature set and writes a deny response when a blocking rule matches.
+func (h *Handler) signatureDenied(response http.ResponseWriter, request *http.Request, ip net.IP, uri string, now time.Time) bool {
+	if h.config.Signatures == nil {
+		return false
+	}
+
+	if retryAfter, blocked := h.activeBlock(ip.String(), now); blocked {
+		h.deny(response, retryAfter, "blocked")
+		return true
+	}
+
+	rule, logged := h.config.Signatures.Current().Match(signatures.Request{
+		Method: request.Header.Get("X-Laravel-Waf-Original-Method"),
+		URI:    uri,
+		Header: request.Header,
+	})
+	for _, match := range logged {
+		h.metrics.Signature(match.ID, match.Action)
+	}
+	if rule == nil {
+		return false
+	}
+
+	h.metrics.Signature(rule.ID, rule.Action)
+	if rule.Action != signatures.ActionBan {
+		h.deny(response, "60", "signature_blocked")
+		return true
+	}
+
+	if !h.reserveSignatureBan(ip.String(), now) {
+		h.deny(response, "60", "signature_blocked")
+		return true
+	}
+
+	operationContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	err := h.blocker.Block(operationContext, ip, rule.TTLSeconds, "sig:"+rule.ID)
+	cancel()
+	outcome := "signature_banned"
+	if err != nil {
+		outcome = "signature_ban_error"
+	} else {
+		expiresAt := now.Add(time.Duration(rule.TTLSeconds) * time.Second)
+		tracked := h.markBlocked(ip.String(), expiresAt)
+		h.mu.Lock()
+		if tracked {
+			delete(h.signatureAttempts, ip.String())
+		} else {
+			// Preserve deduplication even when the completed-block cache is full.
+			h.signatureAttempts[ip.String()] = expiresAt
+		}
+		h.mu.Unlock()
+	}
+	h.deny(response, strconv.Itoa(rule.TTLSeconds), outcome)
+
+	return true
+}
+
+// Reserve before external work. Failures retain a short retry cooldown;
+// clean requests are not considered banned while an attempt is pending.
+func (h *Handler) reserveSignatureBan(ip string, now time.Time) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if !now.Before(h.signatureCleanedAt.Add(time.Minute)) {
+		for client, expiresAt := range h.signatureAttempts {
+			if !now.Before(expiresAt) {
+				delete(h.signatureAttempts, client)
+			}
+		}
+		h.signatureCleanedAt = now
+	}
+	if expiresAt, ok := h.blockedUntil[ip]; ok && now.Before(expiresAt) {
+		return false
+	}
+	if expiresAt, ok := h.signatureAttempts[ip]; ok && now.Before(expiresAt) {
+		return false
+	}
+	if _, exists := h.signatureAttempts[ip]; !exists && len(h.signatureAttempts) >= maxTrackedClients {
+		return false
+	}
+	h.signatureAttempts[ip] = now.Add(time.Minute)
+
+	return true
+}
+
+func (h *Handler) activeBlock(ip string, now time.Time) (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if expiresAt, ok := h.blockedUntil[ip]; ok && now.Before(expiresAt) {
+		return roundedSeconds(expiresAt.Sub(now)), true
+	}
+
+	return "", false
+}
+
 func clientPathKey(ip, path string) string {
 	digest := sha256.Sum256([]byte(path))
 
 	return ip + ":" + hex.EncodeToString(digest[:])
 }
 
-func (h *Handler) markBlocked(ip string, expiresAt time.Time) {
+func (h *Handler) markBlocked(ip string, expiresAt time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	if _, exists := h.blockedUntil[ip]; exists || len(h.blockedUntil) < maxTrackedClients {
 		h.blockedUntil[ip] = expiresAt
+		return true
 	}
+	return false
 }
 
 func (h *Handler) ObserveBlock(ip net.IP, expiresAt time.Time) {
@@ -374,6 +494,10 @@ func (h *Handler) challengeMethod(method string) bool {
 	}
 
 	return false
+}
+
+func validRawURI(originalURI string) bool {
+	return originalURI != "" && len(originalURI) <= 4096 && strings.HasPrefix(originalURI, "/") && !strings.ContainsAny(originalURI, "\r\n")
 }
 
 func requestPath(originalURI string) string {

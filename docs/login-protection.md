@@ -29,6 +29,11 @@ dispatcher is available:
 - `Lockout` creates a security finding and notification opportunity;
 - `Login` clears the active windows when `clear_on_login` is enabled.
 
+When a login request does not contain the configured identifier at the top
+level, as with Filament/Livewire, successful-login cleanup falls back to that
+field on the authenticated user. Duplicate keys are cleared once. The native
+database cache store removes the counters and timers in one delete query.
+
 The identifier is hashed into cache keys. Credentials are not logged, stored,
 sent to notifications, or added to metrics.
 

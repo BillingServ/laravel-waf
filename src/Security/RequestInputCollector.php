@@ -9,8 +9,13 @@ final class RequestInputCollector
 {
     private bool $truncated = false;
 
-    /** @return array<int, InputValue> */
-    public function collect(Request $request): array
+    /**
+     * @param bool $remember false when called before routing, so the later
+     *                       full inspection still collects route parameters
+     *
+     * @return array<int, InputValue>
+     */
+    public function collect(Request $request, bool $remember = true): array
     {
         $cached = $request->attributes->get('laravel-waf.input_values');
         if (is_array($cached)) {
@@ -92,7 +97,9 @@ final class RequestInputCollector
             $this->walk($values, $totalBytes, $maxValues, $maxValueBytes, $maxTotalBytes, 'cookie', $request->cookies->all(), 0, $maxDepth);
         }
 
-        $request->attributes->set('laravel-waf.input_values', $values);
+        if ($remember) {
+            $request->attributes->set('laravel-waf.input_values', $values);
+        }
         $request->attributes->set('laravel-waf.input_truncated', $this->truncated);
 
         return $values;
@@ -231,6 +238,20 @@ final class RequestInputCollector
         foreach ($value as $key => $nested) {
             $part = is_int($key) ? (string) $key : preg_replace('/[^A-Za-z0-9_.:-]/', '_', (string) $key);
             $nestedField = $field === '' ? (string) $part : $field.'.'.$part;
+
+            // Parameter names are client input too: "?-d+allow_url_include=1"
+            // arrives as a key with an empty value. Plain identifiers cannot
+            // carry a payload, so only unusual names are inspected.
+            if (is_string($key) && preg_match('/^[A-Za-z0-9_.-]{1,64}$/D', $key) !== 1) {
+                $this->add($values, $totalBytes, $maxValues, $maxValueBytes, $maxTotalBytes, new InputValue(
+                    $source,
+                    $nestedField,
+                    $key,
+                ));
+                if ($this->truncated) {
+                    return;
+                }
+            }
             $this->walk(
                 $values,
                 $totalBytes,

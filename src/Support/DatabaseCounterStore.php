@@ -16,6 +16,19 @@ final class DatabaseCounterStore extends DatabaseStore
         parent::__construct($store->getConnection(), $store->table, $store->getPrefix());
     }
 
+    /** @param array<int, string> $keys */
+    public function forgetCounters(array $keys): void
+    {
+        // Recent Laravel versions also remove flexible-cache metadata here.
+        if (method_exists(DatabaseStore::class, 'forgetMany')) {
+            $this->forgetMany($keys);
+
+            return;
+        }
+
+        $this->table()->whereIn('key', array_map(fn (string $key): string => $this->prefix.$key, $keys))->delete();
+    }
+
     /**
      * Lock before reading counts so another request cannot change them before flush.
      * Reserve missing rows before using their values, including on databases

@@ -20,8 +20,14 @@ The built-in categories are:
 - `ssrf`: unsafe URL schemes and literal loopback, private, reserved, and metadata hosts;
 - `geo`: country allow and deny policy through a resolver.
 
+Operator-managed signatures from [`signatures.md`](signatures.md) run first
+and carry their own block or ban decision.
+
 Input is collected from the path, query string, parsed body, and route
-parameters by default. Non-JSON, non-multipart bodies without parsed fields
+parameters by default. Parameter names that are not plain identifiers
+(`[A-Za-z0-9_.-]`, at most 64 characters) are inspected as values too, because
+a payload such as `?-d+allow_url_include=1` arrives as a name with an empty
+value. Non-JSON, non-multipart bodies without parsed fields
 are inspected as raw text, as is malformed JSON. Multipart file contents/framing are not scanned;
 client-supplied upload names and relative paths are inspected. Headers and
 cookies remain opt-in. Values, total bytes, nesting depth, and value count are

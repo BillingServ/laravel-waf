@@ -93,6 +93,11 @@ or 120 total requests from one client in the same gate window, followed by a
 `--gate-block-ttl`; setting the threshold to `0` disables only gate-generated
 blocks.
 
+The gate also enforces [signature files](signatures.md) before PHP. By default it loads
+`/etc/laravel-waf/rules.d`; add the package's `resources/rules/core.json` to
+`--signatures` to enforce the built-in scanner rules. Set `--signatures ""` to
+turn signatures off.
+
 Gate mode is disabled when `--gate-socket` is omitted. Existing agent installs
 therefore retain block/unblock-only behavior until explicitly changed.
 When the default ledger is available, active records from

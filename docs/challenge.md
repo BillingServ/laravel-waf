@@ -4,6 +4,12 @@ Challenge mode is an application-layer control for clients that exceed the
 configured request limits. It is not a replacement for Nginx, iptables, or
 upstream DDoS protection.
 
+Traffic-pressure challenges run on `GET` and `HEAD` page loads. They do not
+replace submitted login, logout, cart, or Livewire actions with a verification
+page. Request inspection and per-client rate limits still apply to submissions;
+an exceeded client limit returns `429` without a browser challenge. A subsequent
+page load can run verification after the submitted action has completed.
+
 ## ALTCHA with the existing bsv211 endpoint
 
 The package reads the existing bsv211 variables by default:
@@ -56,8 +62,10 @@ LARAVEL_WAF_CHALLENGE_COOKIE_TTL=3600
 The widget starts on page load and submits the verification form as soon as
 ALTCHA reports a verified proof. In automatic invisible mode, both the widget
 and manual control stay concealed while the page shows a live progress state.
-A reload action appears only if verification takes too long or fails. If
-ALTCHA explicitly requests an interactive challenge, the widget is revealed so
+A retry action appears only if verification takes too long or fails. It resets
+the widget and requests a fresh proof without reloading when the widget is ready.
+Verification that completed before the page listener started is also submitted.
+If ALTCHA explicitly requests an interactive challenge, the widget is revealed so
 the visitor is not trapped. Non-automatic integrations retain the visible
 Continue button.
 

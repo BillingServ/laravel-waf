@@ -31,7 +31,7 @@ final class ChallengePage
         $actionControl = $automatic
             ? '<p class="verification-fallback" data-verification-fallback hidden>'
                 .'This is taking longer than expected. '
-                .'<button class="verification-retry" type="button">Reload the page</button> to try again.</p>'
+                .'<button class="verification-retry" type="button">Try again</button> to restart the check.</p>'
             : '<button class="verification-submit" type="submit">Continue</button>';
         $guidance = $automatic
             ? 'This check is automatic. You will continue as soon as it is complete.'

@@ -33,6 +33,7 @@ final class DdosProtection
     public function handle(Request $request, Closure $next): Response
     {
         $startedAt = hrtime(true);
+        $canChallenge = $request->isMethod('GET') || $request->isMethod('HEAD');
 
         if (!config('laravel-waf.enabled', true) || !config('laravel-waf.ddos.enabled', true)) {
             return $this->finish($next($request), $startedAt);
@@ -70,7 +71,7 @@ final class DdosProtection
 
             return $this->finish($this->protectionUnavailable(), $startedAt);
         }
-        if ($agentGateRetryAfter !== null) {
+        if ($agentGateRetryAfter !== null && $canChallenge) {
             $loginProtected = $this->loginProtected($request);
             $action = $loginProtected ? 'rate_limited' : 'challenge';
             $this->metrics->decision($action, 'agent_gate', $route);
@@ -89,7 +90,7 @@ final class DdosProtection
         }
 
         $adaptiveRetryAfter = $this->adaptiveRetryAfter($challengePassed);
-        if ($adaptiveRetryAfter !== null) {
+        if ($adaptiveRetryAfter !== null && $canChallenge) {
             $loginProtected = $this->loginProtected($request);
             $action = $loginProtected ? 'rate_limited' : 'challenge';
             $this->metrics->decision($action, 'adaptive', $route);
@@ -162,6 +163,7 @@ final class DdosProtection
         if ($violation !== null) {
             $mode = config('laravel-waf.ddos.mode', 'reject');
             $shouldChallenge = ! $challengePassed
+                && $canChallenge
                 && $mode === 'challenge'
                 && config('laravel-waf.challenge.enabled', false);
             $action = $shouldChallenge

@@ -2,6 +2,7 @@
 
 namespace BillingServ\LaravelWaf\Tests\Feature;
 
+use BillingServ\LaravelWaf\Contracts\ChallengeResponder;
 use BillingServ\LaravelWaf\Contracts\ChallengeVerifier;
 use BillingServ\LaravelWaf\Contracts\DecisionSink;
 use BillingServ\LaravelWaf\Http\Middleware\DdosProtection;
@@ -11,6 +12,7 @@ use BillingServ\LaravelWaf\Support\RateLimitKey;
 use BillingServ\LaravelWaf\Tests\TestCase;
 use Illuminate\Cache\RateLimiter;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\Route;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -285,7 +287,7 @@ final class DdosProtectionTest extends TestCase
     }
 
     #[DataProvider('disabledLoginProtectionChallengeCases')]
-    public function test_disabled_login_protection_does_not_suppress_ddos_challenges(string $source, string $ip): void
+    public function test_login_submissions_are_not_challenged_when_login_protection_is_disabled(string $source, string $ip): void
     {
         config()->set('laravel-waf.ddos.mode', 'challenge');
         config()->set('laravel-waf.login.enabled', false);
@@ -309,9 +311,13 @@ final class DdosProtectionTest extends TestCase
             $request = $request->withHeader('X-Laravel-Waf-Gate', str_repeat('g', 32));
         }
 
-        $request->post('/protected-login')
-            ->assertStatus(429)
-            ->assertHeader('X-Laravel-Waf-Challenge', 'required');
+        $response = $request->post('/protected-login');
+        $response->assertHeaderMissing('X-Laravel-Waf-Challenge');
+        if ($source === 'generic') {
+            $response->assertStatus(429);
+        } else {
+            $response->assertOk()->assertContent('logged-in');
+        }
     }
 
     public static function disabledLoginProtectionChallengeCases(): array
@@ -353,7 +359,7 @@ final class DdosProtectionTest extends TestCase
             ->assertHeader('X-Laravel-Waf-Challenge', 'required');
     }
 
-    public function test_excluded_login_middleware_does_not_suppress_a_generic_ddos_challenge(): void
+    public function test_excluded_login_middleware_keeps_generic_rate_limits_without_a_browser_challenge(): void
     {
         config()->set('laravel-waf.ddos.mode', 'challenge');
         config()->set('laravel-waf.challenge.provider', 'altcha');
@@ -366,8 +372,8 @@ final class DdosProtectionTest extends TestCase
         $this->withServerVariables($server)
             ->post('/group-excluded-login')
             ->assertStatus(429)
-            ->assertHeader('X-Laravel-Waf-Challenge', 'required')
-            ->assertSee('Checking your browser');
+            ->assertHeaderMissing('X-Laravel-Waf-Challenge')
+            ->assertDontSee('Checking your browser');
     }
 
     public function test_global_waf_detects_login_protection_before_route_dispatch(): void
@@ -458,6 +464,7 @@ final class DdosProtectionTest extends TestCase
 
     public function test_livewire_challenge_navigates_to_a_top_level_page_and_returns_to_the_form(): void
     {
+        $this->defineLivewireChallengeRoute();
         config()->set('laravel-waf.ddos.mode', 'challenge');
         config()->set('laravel-waf.challenge.provider', 'altcha');
         config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost/altcha/challenge');
@@ -519,6 +526,7 @@ final class DdosProtectionTest extends TestCase
     #[DataProvider('referrerPortCases')]
     public function test_livewire_return_url_requires_the_same_effective_port(string $referer, string $expectedReturnTo): void
     {
+        $this->defineLivewireChallengeRoute();
         config()->set('laravel-waf.ddos.mode', 'challenge');
         config()->set('laravel-waf.challenge.provider', 'altcha');
         config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost:8080/altcha/challenge');
@@ -650,6 +658,7 @@ final class DdosProtectionTest extends TestCase
     #[DataProvider('livewireUnavailableCases')]
     public function test_livewire_altcha_unavailable_response_is_json_with_a_wildcard_accept_header(array $configuration): void
     {
+        $this->defineLivewireChallengeRoute();
         config()->set('laravel-waf.ddos.mode', 'challenge');
         config()->set('laravel-waf.challenge.provider', 'altcha');
         foreach ($configuration as $key => $value) {
@@ -668,9 +677,6 @@ final class DdosProtectionTest extends TestCase
             'Accept' => '*/*',
             'X-Livewire' => 'true',
         ];
-        $this->withServerVariables($server)->postJson('/livewire/update', $request, $headers)->assertOk();
-        $this->withServerVariables($server)->postJson('/livewire/update', $request, $headers)->assertOk();
-
         $this->withServerVariables($server)
             ->postJson('/livewire/update', $request, $headers)
             ->assertStatus(503)
@@ -696,6 +702,7 @@ final class DdosProtectionTest extends TestCase
 
     public function test_livewire_challenge_accepts_a_long_signed_return_url(): void
     {
+        $this->defineLivewireChallengeRoute();
         config()->set('laravel-waf.ddos.mode', 'challenge');
         config()->set('laravel-waf.challenge.provider', 'altcha');
         config()->set('laravel-waf.challenge.altcha.challenge_url', 'http://localhost/altcha/challenge');
@@ -780,7 +787,7 @@ final class DdosProtectionTest extends TestCase
             ->assertSee('data-verification-label', false)
             ->assertSee('This usually takes only a few seconds.')
             ->assertSee('This check is automatic. You will continue as soon as it is complete.')
-            ->assertSee('Reload the page')
+            ->assertSee('Try again')
             ->assertSee('Performance & security by')
             ->assertSee('https://www.billingserv.com', false)
             ->assertDontSee('class="verification-submit"', false)
@@ -950,6 +957,11 @@ final class DdosProtectionTest extends TestCase
                 'blocked' => true,
                 'scope' => 'test',
             ]);
+    }
+
+    private function defineLivewireChallengeRoute(): void
+    {
+        Route::post('/livewire/update', static fn (Request $request) => app(ChallengeResponder::class)->respond($request, 60, 'rule_policy'));
     }
 
     private function validAltchaPayload(): string

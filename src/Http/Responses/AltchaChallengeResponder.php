@@ -171,7 +171,7 @@ final class AltchaChallengeResponder implements ChallengeResponder
             JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_THROW_ON_ERROR,
         );
 
-        return '<script>window.addEventListener("load",function(){'
+        return '<script>(function(){var initialize=function(){'
             .'var widget=document.querySelector("altcha-widget");'
             .'var form=widget&&widget.closest("form");'
             .'if(!widget||!form){return;}'
@@ -203,7 +203,7 @@ final class AltchaChallengeResponder implements ChallengeResponder
             .'};'
             .'var fail=function(){'
             .'clearTimeout(slowTimer);'
-            .'setState("failed","We could not complete the check","Reload the page to try again.");'
+            .'setState("failed","We could not complete the check","Use Try again to restart verification.");'
             .'showRetry();'
             .'};'
             .'setState("verifying","Checking your browser","This usually takes only a few seconds.");'
@@ -222,7 +222,10 @@ final class AltchaChallengeResponder implements ChallengeResponder
             .'form.appendChild(input);}'
             .'input.value=value;return true;'
             .'};'
-            .'var submit=function(payload){if(submitted||!storePayload(payload)){return;}'
+            .'var submit=function(payload){'
+            .'var existing=form.elements.namedItem(fieldName);'
+            .'payload=payload||(existing&&existing.value);'
+            .'if(submitted||!storePayload(payload)){return;}'
             .'submitted=true;clearTimeout(slowTimer);'
             .'setState("verified","Check complete","Continuing…");'
             .'if(fallback){fallback.hidden=true;}'
@@ -242,10 +245,20 @@ final class AltchaChallengeResponder implements ChallengeResponder
             .'widget.addEventListener("verified",function(event){'
             .'if(event.detail){submit(event.detail.payload);}'
             .'});'
+            .'var synchronize=function(){'
+            .'if(typeof widget.getState==="function"&&widget.getState()==="verified"){submit();}'
+            .'};'
+            .'widget.addEventListener("load",synchronize);'
+            .'synchronize();'
             .'if(retry){retry.addEventListener("click",function(){'
-            .'window.location.reload();'
+            .'if(typeof widget.reset==="function"&&typeof widget.verify==="function"){'
+            .'widget.reset();'
+            .'setState("verifying","Checking your browser","This usually takes only a few seconds.");'
+            .'Promise.resolve(widget.verify()).catch(fail);'
+            .'}else{window.location.reload();}'
             .'});}'
-            .'});</script>';
+            .'};if(document.readyState==="complete"){initialize();}'
+            .'else{window.addEventListener("load",initialize,{once:true});}})();</script>';
     }
 
     private function automatic(): bool

@@ -25,7 +25,7 @@ final class RequestInputCollector
         $this->truncated = false;
         $config = (array) config('laravel-waf.rules.input', []);
         $maxValues = max(1, min(4096, (int) ($config['max_values'] ?? 1024)));
-        $maxDepth = max(1, min(12, (int) ($config['max_depth'] ?? 10)));
+        $maxDepth = max(1, min(32, (int) ($config['max_depth'] ?? 32)));
         $maxValueBytes = max(1, min(1048576, (int) ($config['max_value_bytes'] ?? 65536)));
         $maxTotalBytes = max($maxValueBytes, min(4194304, (int) ($config['max_total_bytes'] ?? 262144)));
         $values = [];

@@ -45,13 +45,20 @@ or be hidden by, a category's reject action. The existing safe finding metadata,
 notifications, and optional automatic host-block settings also apply.
 
 Default inspection budgets are 64 KiB per value, 256 KiB total, 1,024 nonempty
-string values, and 10 levels of nesting. These include enabled sources such
+string values, and 32 levels of nesting. These include enabled sources such
 as the request path and upload names, but not uploaded file contents. Bytes
 are measured before normalization; a Livewire snapshot counts as one string.
 Override them using `LARAVEL_WAF_RULES_MAX_VALUE_BYTES`,
 `LARAVEL_WAF_RULES_MAX_INPUT_BYTES`, `LARAVEL_WAF_RULES_MAX_VALUES`, and
 `LARAVEL_WAF_RULES_MAX_DEPTH`. Existing published configuration or environment
 overrides retain their explicitly configured limits.
+
+The depth budget includes transport envelopes such as Livewire's `components`
+and `updates` arrays as well as nested rich-editor documents. The default
+allows formatted paragraphs and lists without excluding their content from
+inspection. Configured depths are bounded to 1–32 levels; the byte and value
+limits still apply. Published configurations or environment overrides using
+the older depth of 10 must raise it to allow these documents.
 
 Requests exactly at the limits remain valid. Requests over them, including
 benign large forms or deeply nested upload names, now trigger the configured

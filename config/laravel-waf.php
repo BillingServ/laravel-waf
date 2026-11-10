@@ -84,7 +84,7 @@ return [
             'max_total_bytes' => (int) env('LARAVEL_WAF_RULES_MAX_INPUT_BYTES', 262144),
             'max_value_bytes' => (int) env('LARAVEL_WAF_RULES_MAX_VALUE_BYTES', 65536),
             'max_values' => (int) env('LARAVEL_WAF_RULES_MAX_VALUES', 1024),
-            'max_depth' => (int) env('LARAVEL_WAF_RULES_MAX_DEPTH', 10),
+            'max_depth' => (int) env('LARAVEL_WAF_RULES_MAX_DEPTH', 32),
         ],
         'categories' => [
             'policy' => [

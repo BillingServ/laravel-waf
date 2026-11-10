@@ -36,6 +36,10 @@ final class RequestInputLimitsTest extends TestCase
     public static function overflowRequests(): array
     {
         $padding = array_fill_keys(array_map(static fn (int $i): string => 'pad'.$i, range(1, 1023)), 'a');
+        $nested = 'ordinary text';
+        for ($i = 0; $i < 33; $i++) {
+            $nested = ['level'.$i => $nested];
+        }
 
         return [
             // Keep this query below PHP's separate max_input_vars limit.
@@ -47,6 +51,8 @@ final class RequestInputLimitsTest extends TestCase
             ]],
             'nested body' => ['POST', ['max_depth' => 2], ['a' => ['b' => ['c' => '<script>alert(1)</script>']]]],
             'nested query' => ['GET', ['max_depth' => 2], ['a' => ['b' => ['c' => '../../../etc/passwd']]]],
+            'default depth exceeded' => ['POST', [], $nested],
+            'hard depth ceiling exceeded' => ['POST', ['max_depth' => 1000], $nested],
         ];
     }
 
@@ -67,7 +73,7 @@ final class RequestInputLimitsTest extends TestCase
     public static function normalRequests(): iterable
     {
         $nested = 'standard';
-        for ($i = 0; $i < 10; $i++) {
+        for ($i = 0; $i < 32; $i++) {
             $nested = ['level'.$i => $nested];
         }
 
@@ -80,6 +86,7 @@ final class RequestInputLimitsTest extends TestCase
                 'snapshot' => json_encode(['data' => ['content' => str_repeat('ordinary text ', 2048)], 'memo' => ['id' => 'editor', 'name' => 'editor'], 'checksum' => str_repeat('a', 64)], JSON_THROW_ON_ERROR),
                 'updates' => [], 'calls' => [],
             ]]],
+            'Livewire rich editor' => self::richEditorRequest('Formatted content'),
         ];
 
         foreach ($requests as $name => $payload) {
@@ -96,6 +103,41 @@ final class RequestInputLimitsTest extends TestCase
         }
 
         $this->postJson('/inspect', $payload)->assertOk()->assertContent('ok');
+    }
+
+    public function test_rich_editor_content_remains_inspected_at_the_new_depth(): void
+    {
+        $payload = self::richEditorRequest('<script>alert(1)</script>');
+        $request = Request::create('/inspect', 'POST', $payload);
+        app(RequestInputCollector::class)->collect($request);
+        self::assertFalse($request->attributes->get('laravel-waf.input_truncated'));
+
+        $this->postJson('/inspect', $payload)
+            ->assertStatus(403)->assertHeader('X-Laravel-Waf-Blocked', 'true');
+    }
+
+    private static function richEditorRequest(string $text): array
+    {
+        return ['components' => [[
+            'snapshot' => '{}',
+            'updates' => ['data.description' => [
+                'type' => 'doc',
+                'content' => [[
+                    'type' => 'bulletList',
+                    'content' => [[
+                        'type' => 'listItem',
+                        'content' => [[
+                            'type' => 'paragraph',
+                            'content' => [[
+                                'type' => 'text', 'text' => $text,
+                                'marks' => [['type' => 'bold'], ['type' => 'link', 'attrs' => ['href' => 'https://example.com/news']]],
+                            ]],
+                        ]],
+                    ]],
+                ]],
+            ]],
+            'calls' => [['method' => 'create', 'params' => []]],
+        ]]];
     }
 
     public static function exactLimits(): array

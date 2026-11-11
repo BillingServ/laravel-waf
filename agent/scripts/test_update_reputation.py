@@ -1,4 +1,6 @@
+import gzip
 import importlib.util
+import io
 import ipaddress
 import json
 from pathlib import Path
@@ -12,7 +14,133 @@ reputation = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(reputation)
 
 
+def tor_relay(**overrides):
+    relay = {
+        "running": True, "flags": ["Exit", "Running"],
+        "or_addresses": ["109.70.100.13:9001", "[2a03:e600:100::13]:9001"],
+        "exit_addresses": ["109.70.100.13"],
+        "exit_policy_v6_summary": {"accept": ["80", "443"]},
+    }
+    relay.update(overrides)
+    return relay
+
+
+def tor_document(*relays):
+    return json.dumps({"version": "8.0", "relays": list(relays)}).encode()
+
+
 class ReputationTest(unittest.TestCase):
+    def test_tor_ipv6_includes_reported_exit_as_an_exact_address(self):
+        body = tor_document(tor_relay(), tor_relay())
+        prefixes = reputation.parse_feed(body, "onionoo_ipv6")
+        self.assertEqual({reputation.network("2a03:e600:100::13/128")}, prefixes)
+        self.assertFalse(any(ipaddress.ip_address("2a03:e600:100::14") in prefix for prefix in prefixes))
+
+    def test_ipv6_policy_matches_web_ports_with_accept_and_reject_ranges(self):
+        cases = [
+            ({"accept": ["80"]}, True), ({"accept": ["400-500"]}, True),
+            ({"accept": ["22", "81-442"]}, False),
+            ({"reject": ["25"]}, True), ({"reject": ["80"]}, True),
+            ({"reject": ["80", "443"]}, False), ({"reject": ["1-65535"]}, False),
+        ]
+        for policy, expected in cases:
+            with self.subTest(policy=policy):
+                self.assertEqual(expected, reputation.web_exit_policy(policy))
+        for policy in ({}, {"accept": "80"}, {"accept": ["0-80"]}, {"reject": ["443-80"]}):
+            with self.subTest(policy=policy), self.assertRaises(ValueError):
+                reputation.web_exit_policy(policy)
+
+    def test_tor_ipv6_ignores_offline_nonexit_and_nonweb_advertised_addresses(self):
+        body = tor_document(
+            tor_relay(),
+            tor_relay(running=False, or_addresses=["[2001:db8::1]:9001"]),
+            tor_relay(flags=["Running"], or_addresses=["[2001:db8::2]:9001"]),
+            tor_relay(exit_policy_v6_summary=None, or_addresses=["[2001:db8::3]:9001"]),
+            tor_relay(exit_policy_v6_summary={"reject": ["1-65535"]}, or_addresses=["[2001:db8::4]:9001"]),
+        )
+        self.assertEqual({reputation.network("2a03:e600:100::13")}, reputation.parse_feed(body, "onionoo_ipv6"))
+
+    def test_observed_ipv6_exit_addresses_are_preserved_when_provided(self):
+        body = tor_document(tor_relay(
+            or_addresses=[], exit_addresses=["2001:db8::5"], exit_policy_v6_summary=None,
+        ))
+        self.assertEqual({reputation.network("2001:db8::5")}, reputation.parse_feed(body, "onionoo_ipv6"))
+
+    def test_malformed_or_incomplete_ipv6_documents_are_rejected(self):
+        bodies = [
+            b"[]", b"{}", b'{"relays":[]}', b'{"relays":{},"relays_truncated":1}',
+            tor_document(tor_relay(flags=None)),
+            tor_document(tor_relay(or_addresses=["[2a03:e600:100::13]:invalid"])),
+            tor_document(tor_relay(or_addresses=["[fc00::1]:9001"])),
+            tor_document(tor_relay(or_addresses=["[2a03:e600:100::13%eth0]:9001"])),
+            tor_document(tor_relay(exit_addresses=[123])),
+        ]
+        for body in bodies:
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                reputation.parse_feed(body, "onionoo_ipv6")
+        body = json.loads(tor_document(tor_relay()))
+        body["relays_truncated"] = 1
+        with self.assertRaises(ValueError):
+            reputation.parse_feed(json.dumps(body).encode(), "onionoo_ipv6")
+
+    def test_download_decodes_gzip_before_feed_validation(self):
+        body = tor_document(tor_relay())
+        response = io.BytesIO(gzip.compress(body))
+        response.status = 200
+        response.headers = {"Content-Encoding": "gzip"}
+        with patch.object(reputation.urllib.request, "build_opener") as opener:
+            opener.return_value.open.return_value = response
+            self.assertEqual(body, reputation.download("https://example.test/relays"))
+            request = opener.return_value.open.call_args.args[0]
+            self.assertEqual("gzip", request.get_header("Accept-encoding"))
+
+    def test_gzip_download_limit_applies_to_decompressed_data(self):
+        response = io.BytesIO(gzip.compress(b"X" * 1000))
+        response.status = 200
+        response.headers = {"Content-Encoding": "gzip"}
+        with patch.object(reputation.urllib.request, "build_opener") as opener, patch.object(reputation, "MAX_BYTES", 100):
+            opener.return_value.open.return_value = response
+            body = reputation.download("https://example.test/relays")
+        self.assertEqual(101, len(body))
+
+    def test_truncated_gzip_is_a_recoverable_feed_error(self):
+        response = io.BytesIO(gzip.compress(tor_document(tor_relay()))[:-8])
+        response.status = 200
+        response.headers = {"Content-Encoding": "gzip"}
+        with patch.object(reputation.urllib.request, "build_opener") as opener:
+            opener.return_value.open.return_value = response
+            with self.assertRaises(ValueError):
+                reputation.download("https://example.test/relays")
+
+    def test_tor_selection_automatically_includes_ipv6_and_defaults_include_dual_stack_abuse(self):
+        args = reputation.arguments(["--feeds=tor"])
+        self.assertEqual(["tor", "tor_ipv6"], args.feeds)
+        self.assertIn("blocklist_de", reputation.arguments([]).feeds)
+
+    def test_refresh_imports_ipv4_and_ipv6_and_checks_both_firewall_rules(self):
+        def source(url):
+            if "onionoo" in url:
+                return tor_document(tor_relay())
+            return b"ExitAddress 109.70.100.13 2026-11-11 12:00:00\n"
+
+        def execute(command, *_):
+            if "-C" in command:
+                raise RuntimeError("rule missing")
+            return ""
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(reputation, "download", side_effect=source), patch.object(reputation.os, "geteuid", return_value=0), patch.object(reputation, "run", side_effect=execute) as command:
+                result = reputation.main(["--feeds=tor", f"--state-dir={directory}"])
+            self.assertEqual(0, result)
+            self.assertTrue(Path(directory, "tor_ipv6.json").exists())
+        restore = command.call_args_list[0].args[1]
+        self.assertIn("add lwaf_reputation_v4_next 109.70.100.13/32 timeout", restore)
+        self.assertIn("add lwaf_reputation_v6_next 2a03:e600:100::13/128 timeout", restore)
+        rules = [call.args[0] for call in command.call_args_list if "-I" in call.args[0]]
+        self.assertEqual(2, len(rules))
+        self.assertIn("lwaf_reputation_v6", rules[1])
+        self.assertIn("DROP", rules[1])
+
     def test_parses_provider_formats_and_deduplicates(self):
         cases = {
             "tor": (
@@ -27,8 +155,8 @@ class ReputationTest(unittest.TestCase):
                 {"2001:db8::/48"},
             ),
             "netset": (
-                b"# FireHOL\n203.0.113.7/24\n203.0.113.0/24 # duplicate\n198.51.100.9\n",
-                {"203.0.113.0/24", "198.51.100.9/32"},
+                b"# Mixed feed\n203.0.113.7/24\n203.0.113.0/24 # duplicate\n198.51.100.9\n2001:db8::5\n",
+                {"203.0.113.0/24", "198.51.100.9/32", "2001:db8::5/128"},
             ),
         }
         for format_name, (body, expected) in cases.items():

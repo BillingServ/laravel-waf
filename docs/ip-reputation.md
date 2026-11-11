@@ -8,11 +8,24 @@ do not affect these firewall rules. The installed Go binary is unchanged.
 
 The default sources are:
 
-| Source | Coverage |
-| --- | --- |
-| [Tor Project exit list](https://check.torproject.org/exit-addresses) | Tor exit addresses |
-| [Spamhaus DROP](https://www.spamhaus.org/blocklists/do-not-route-or-peer/) | IPv4 and IPv6 networks controlled by criminal operations |
-| [FireHOL Level 2](https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level2.netset) | IPs/ranges reported for recent attacks, combining blocklist.de, DShield, and GreenSnow |
+| Source | IPv4 | IPv6 | Coverage |
+| --- | --- | --- | --- |
+| [Tor Project exit list](https://check.torproject.org/exit-addresses) | Yes | No | Observed Tor exit addresses |
+| [Tor Onionoo](https://metrics.torproject.org/onionoo.html) | Via the exit list | Yes | Advertised IPv6 addresses of running exit relays permitting TCP 80 or 443, plus observed IPv6 exit addresses when supplied |
+| [Spamhaus DROP](https://www.spamhaus.org/blocklists/do-not-route-or-peer/) | Yes | Yes | Separate feeds for networks controlled by criminal operations |
+| [blocklist.de](https://www.blocklist.de/en/export.html) | Yes | Yes | Addresses reported for attacks within the last 48 hours |
+| [FireHOL Level 2](https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level2.netset) | Yes | No | Recent attacks, combining blocklist.de, DShield, and GreenSnow |
+
+The Tor exit list alone does not cover IPv6. The `tor_ipv6` source supplements
+it with Onionoo relay data. Onionoo currently measures IPv4 exit addresses;
+its IPv6 relay addresses are associated with exits, rather than measured IPv6
+egress addresses. Relays can use an unadvertised address for outbound traffic,
+so this does not guarantee every possible Tor IPv6 exit is listed. Each IPv6
+address is imported as an exact `/128`, rather than blocking its whole subnet.
+
+FireHOL Level 2 is IPv4-only. The direct blocklist.de feed adds IPv6 abuse
+reports alongside it. All feeds accept IPv4/IPv6 entries when supplied, and
+refresh logs show counts for both address families.
 
 Only FireHOL's published data is consumed; installing FireHOL is unnecessary.
 These feeds do not enumerate every VPN, residential proxy, or attacker. They
@@ -75,6 +88,30 @@ invalid content, and empty lists use the previous cache for up to 48 hours.
 Kernel members retain the original cache expiry, so a failed refresh cannot
 extend a stale block indefinitely. Expired feeds are omitted at the next run.
 
+## Check IPv4 and IPv6 enforcement
+
+Verify that both sets contain entries and both firewall rules are present:
+
+```bash
+sudo ipset list lwaf_reputation_v4 -terse
+sudo ipset list lwaf_reputation_v6 -terse
+sudo iptables -L INPUT -n -v | grep lwaf_reputation
+sudo ip6tables -L INPUT -n -v | grep lwaf_reputation
+```
+
+For an individual address, use `ipset test` with the matching family and also
+check its allowlist. For example, replace `YOUR_IPV6_ADDRESS` below:
+
+```bash
+sudo ipset test lwaf_reputation_v6 YOUR_IPV6_ADDRESS
+sudo ipset test lwaf_rep_allow_v6 YOUR_IPV6_ADDRESS
+```
+
+An address must match the reputation set and be absent from its allowlist for
+that firewall rule to drop it. A matching set entry alone does not prove a
+request was blocked: verify packet counters and use the actual source address
+for the protected site. Tor can use different exit relays for different sites.
+
 ## Exceptions and feed selection
 
 Add options to the helper command in both cron entries and in manual runs.
@@ -89,8 +126,10 @@ Replace the example addresses with your own. Include the agent's
 the helper has its own allowlist. These exceptions affect reputation lists
 only; they do not override the agent's temporary bans.
 
-`--feeds=tor,spamhaus_drop_v4,spamhaus_drop_v6,firehol_level2` selects the
-default sources. Remove names to disable specific feeds. `--max-age=172800`
+`--feeds=tor,tor_ipv6,blocklist_de,spamhaus_drop_v4,spamhaus_drop_v6,firehol_level2`
+selects the default sources. Selecting `tor` also enables `tor_ipv6`, including
+for existing cron commands that explicitly set `--feeds=tor`. Remove other
+names to disable specific feeds. `--max-age=172800`
 sets the cache lifetime in seconds, bounded between two hours and seven days.
 `--ports=80,443` changes the protected TCP ports without touching SSH or other
 services. Pass `--ipset`, `--iptables`, or `--ip6tables` if executables are

@@ -4,6 +4,7 @@
 import argparse
 import contextlib
 import fcntl
+import gzip
 import ipaddress
 import json
 import logging
@@ -16,10 +17,17 @@ import sys
 import tempfile
 import time
 import urllib.request
+import zlib
 
 
 FEEDS = {
     "tor": ("https://check.torproject.org/exit-addresses", "tor"),
+    "tor_ipv6": (
+        "https://onionoo.torproject.org/details?type=relay&running=true&flag=Exit"
+        "&fields=running,flags,or_addresses,exit_addresses,exit_policy_v6_summary",
+        "onionoo_ipv6",
+    ),
+    "blocklist_de": ("https://lists.blocklist.de/lists/all.txt", "netset"),
     "spamhaus_drop_v4": ("https://www.spamhaus.org/drop/drop_v4.json", "spamhaus"),
     "spamhaus_drop_v6": ("https://www.spamhaus.org/drop/drop_v6.json", "spamhaus"),
     "firehol_level2": (
@@ -49,9 +57,76 @@ def network(value):
     return result
 
 
+def web_exit_policy(policy):
+    if not isinstance(policy, dict) or set(policy) not in ({"accept"}, {"reject"}):
+        raise ValueError("invalid IPv6 exit policy")
+    action, ranges = next(iter(policy.items()))
+    if not isinstance(ranges, list):
+        raise ValueError("invalid IPv6 exit ports")
+    matched = set()
+    for value in ranges:
+        if not isinstance(value, str):
+            raise ValueError("invalid IPv6 exit port range")
+        first, separator, last = value.partition("-")
+        last = last if separator else first
+        if not all(part.isascii() and part.isdigit() for part in (first, last)):
+            raise ValueError("invalid IPv6 exit port range")
+        lower, upper = int(first), int(last)
+        if not 1 <= lower <= upper <= 65535:
+            raise ValueError("invalid IPv6 exit port range")
+        matched.update(port for port in (80, 443) if lower <= port <= upper)
+    return bool(matched) if action == "accept" else len(matched) < 2
+
+
+def onionoo_ipv6(body):
+    document = json.loads(body)
+    if not isinstance(document, dict) or not isinstance(document.get("relays"), list):
+        raise ValueError("invalid Onionoo relay document")
+    if document.get("relays_skipped") or document.get("relays_truncated"):
+        raise ValueError("incomplete Onionoo relay document")
+    addresses = set()
+    for relay in document["relays"]:
+        if not isinstance(relay, dict) or not isinstance(relay.get("flags"), list):
+            raise ValueError("invalid Onionoo relay")
+        if relay.get("running") is not True or "Exit" not in relay["flags"]:
+            continue
+        observed = relay.get("exit_addresses", [])
+        advertised = relay.get("or_addresses", [])
+        if not isinstance(observed, list) or not isinstance(advertised, list):
+            raise ValueError("invalid Onionoo address lists")
+        for value in observed:
+            if not isinstance(value, str) or "%" in value:
+                raise ValueError("invalid Onionoo exit address")
+            address = ipaddress.ip_address(value)
+            if address.version == 6 and not address.ipv4_mapped:
+                addresses.add(str(address))
+        policy = relay.get("exit_policy_v6_summary")
+        if policy is None or not web_exit_policy(policy):
+            continue
+        # Onionoo's observed exit addresses are currently IPv4-only. Supplement
+        # them with advertised IPv6 addresses of relays that permit web exits.
+        # These are relay-associated addresses, not measured IPv6 exit addresses.
+        for value in advertised:
+            if not isinstance(value, str):
+                raise ValueError("invalid Onionoo relay address")
+            if not value.startswith("["):
+                continue
+            address, separator, port = value[1:].partition("]:")
+            if not separator or not port.isascii() or not port.isdigit() or not 1 <= int(port) <= 65535:
+                raise ValueError("invalid Onionoo IPv6 relay address")
+            address = ipaddress.IPv6Address(address)
+            if address.ipv4_mapped or "%" in str(address):
+                raise ValueError("invalid Onionoo IPv6 relay address")
+            addresses.add(str(address))
+    return "\n".join(sorted(addresses)).encode("utf-8")
+
+
 def parse_feed(body, format_name):
     if len(body) > MAX_BYTES:
         raise ValueError("feed exceeds download limit")
+    if format_name == "onionoo_ipv6":
+        body = onionoo_ipv6(body)
+        format_name = "netset"
     networks = set()
     for line in body.decode("utf-8").splitlines():
         line = line.strip()
@@ -102,10 +177,18 @@ class NoRedirects(urllib.request.HTTPRedirectHandler):
 
 
 def download(url):
-    request = urllib.request.Request(url, headers={"User-Agent": "LWAF-Reputation/1.0"})
+    request = urllib.request.Request(url, headers={
+        "User-Agent": "LWAF-Reputation/1.0", "Accept-Encoding": "gzip",
+    })
     with urllib.request.build_opener(NoRedirects).open(request, timeout=30) as response:
         if response.status != 200:
             raise ValueError(f"feed returned HTTP {response.status}")
+        if response.headers.get("Content-Encoding", "").lower().strip() == "gzip":
+            try:
+                with gzip.GzipFile(fileobj=response) as stream:
+                    return stream.read(MAX_BYTES + 1)
+            except (EOFError, zlib.error) as error:
+                raise ValueError("invalid compressed feed") from error
         return response.read(MAX_BYTES + 1)
 
 
@@ -140,7 +223,8 @@ def collect(feeds, state_dir, max_age, dry_run=False):
                 atomic_write(path, json.dumps({
                     "fetched_at": fetched_at, "body": body.decode("utf-8"),
                 }).encode())
-            LOG.info("feed=%s networks=%d refreshed", name, len(prefixes))
+            ipv4 = sum(prefix.version == 4 for prefix in prefixes)
+            LOG.info("feed=%s networks=%d ipv4=%d ipv6=%d refreshed", name, len(prefixes), ipv4, len(prefixes) - ipv4)
         except (OSError, ValueError, KeyError, TypeError) as error:
             failed = True
             LOG.error("feed=%s refresh failed: %s", name, error)
@@ -289,6 +373,9 @@ def arguments(argv=None):
     args.feeds = list(dict.fromkeys(item.strip() for item in args.feeds.split(",") if item.strip()))
     if not args.feeds or any(name not in FEEDS for name in args.feeds):
         parser.error("--feeds must select known feeds: " + ",".join(FEEDS))
+    # Existing --feeds=tor deployments receive IPv6 coverage after updating.
+    if "tor" in args.feeds and "tor_ipv6" not in args.feeds:
+        args.feeds.insert(args.feeds.index("tor") + 1, "tor_ipv6")
     if not args.state_dir.is_absolute() or not 7200 <= args.max_age <= 604800:
         parser.error("--state-dir must be absolute; --max-age must be between 7200 and 604800 seconds")
     ports = args.ports.split(",")
@@ -314,7 +401,8 @@ def update(args):
     enforce(entries, args.allowed, args.ports, args.ipset, args.iptables, args.ip6tables)
     if args.nginx_geo_file:
         update_nginx(args.nginx_geo_file, geo_text(entries, args.allowed), args.nginx)
-    LOG.info("active reputation networks=%d", len(entries))
+    ipv4 = sum(prefix.version == 4 for prefix in entries)
+    LOG.info("active reputation networks=%d ipv4=%d ipv6=%d", len(entries), ipv4, len(entries) - ipv4)
     return int(failed)
 
 

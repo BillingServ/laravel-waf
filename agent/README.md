@@ -134,7 +134,8 @@ Use `--dry-run` while validating the integration. Start with `LARAVEL_WAF_AGENT_
 ## IP reputation without rebuilding the agent
 
 The standalone [`scripts/update-reputation.py`](scripts/update-reputation.py)
-helper blocks Tor exits, Spamhaus DROP networks, and recently abusive IPs from
+helper blocks Tor exit addresses, including advertised IPv6 addresses of web
+exit relays, Spamhaus DROP networks, and abusive IPs from blocklist.de and
 FireHOL Level 2 using separate IPv4/IPv6 `hash:net` sets. Add the documented
 root cron entries to refresh feeds hourly and after reboot. Run the helper
 directly from `vendor` so Composer updates also update the helper. It rejects

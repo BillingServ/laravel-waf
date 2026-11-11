@@ -131,6 +131,18 @@ pre-application gate continues denying their non-bypass dynamic requests.
 
 Use `--dry-run` while validating the integration. Start with `LARAVEL_WAF_AGENT_AUTO_BLOCK=false`; automatic host blocks should only be enabled after the application's IP and proxy configuration have been verified. When the host also runs a firewall service that rebuilds INPUT, order this service after it so the initial rules are attached last.
 
+## IP reputation without rebuilding the agent
+
+The standalone [`scripts/update-reputation.py`](scripts/update-reputation.py)
+helper blocks Tor exits, Spamhaus DROP networks, and recently abusive IPs from
+FireHOL Level 2 using separate IPv4/IPv6 `hash:net` sets. Add the documented
+root cron entries to refresh feeds hourly and after reboot. Run the helper
+directly from `vendor` so Composer updates also update the helper. It rejects
+listed clients on ports 80/443 even when Laravel is in log mode; temporary agent bans remain
+independent. An optional Nginx geo check covers forwarded clients behind a
+trusted reverse proxy. See [`../docs/ip-reputation.md`](../docs/ip-reputation.md)
+for cron setup, exceptions, and cache behaviour.
+
 ## Manually add or remove an IP
 
 The running agent can also accept explicit operator decisions through its

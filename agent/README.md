@@ -133,11 +133,13 @@ Use `--dry-run` while validating the integration. Start with `LARAVEL_WAF_AGENT_
 
 ## IP reputation without rebuilding the agent
 
-The same hourly helper can pull your private BSRBL feed and report active
-bans from the existing agent ledger to it. Configure the URL and a scoped API
-key in the application's `.env` using the [integration guide](../docs/bsrbl.md).
-After updating the Python helper, this needs no Go rebuild, separate agent
-service, or additional cron job. Reports cover bans still active when it runs.
+The hourly helper pulls your private BSRBL feed. The updated Go agent reports
+accepted bans directly to BSRBL in the background, including gate, Laravel and
+manual bans. This needs a one-time binary update and restart, with no additional
+service or Ansible deployment. It reads BSRBL settings from the existing Laravel
+`.env`, discovered from the Composer signature path. Use `--download-only` in cron;
+see the [integration guide](../docs/bsrbl.md) for discovery and file access details.
+The original helper-based reporting remains available for older binaries.
 
 The standalone [`scripts/update-reputation.py`](scripts/update-reputation.py)
 helper blocks Tor exit addresses, including advertised IPv6 addresses of web

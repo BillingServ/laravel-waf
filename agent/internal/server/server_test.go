@@ -60,6 +60,26 @@ func (s *recordingStore) RemoveBlock(ip net.IP) error {
 
 type failingStore struct{}
 
+type recordingReporter struct {
+	ip     net.IP
+	reason string
+	calls  int
+	err    error
+}
+
+func (r *recordingReporter) Report(ip net.IP, _ time.Time, reason string) error {
+	r.ip = append(net.IP(nil), ip...)
+	r.reason = reason
+	r.calls++
+	return r.err
+}
+
+type failingBackend struct{ recordingBackend }
+
+func (*failingBackend) Block(context.Context, net.IP, int) error {
+	return errors.New("firewall failed")
+}
+
 type recordingObserver struct {
 	blockedIP net.IP
 	expiresAt time.Time
@@ -84,12 +104,14 @@ func TestHandleRecordsAcceptedBlockReason(t *testing.T) {
 	backend := &recordingBackend{}
 	store := &recordingStore{}
 	observer := &recordingObserver{}
+	reporter := &recordingReporter{}
 	service := &Server{
 		MaxTTL:   protocol.MaxTTLSeconds,
 		Backend:  backend,
 		Store:    store,
 		Metrics:  metrics.NewRegistry("test.example", "test"),
 		Observer: observer,
+		Reporter: reporter,
 	}
 
 	serverConnection, clientConnection := net.Pipe()
@@ -126,6 +148,43 @@ func TestHandleRecordsAcceptedBlockReason(t *testing.T) {
 	}
 	if observer.blockedIP.String() != "203.0.113.10" || time.Until(observer.expiresAt) <= 0 {
 		t.Fatalf("unexpected block observation: %#v", observer)
+	}
+	if reporter.calls != 1 || reporter.ip.String() != "203.0.113.10" || reporter.reason != "rule_sql_injection" {
+		t.Fatalf("accepted socket decision did not queue a report: %#v", reporter)
+	}
+}
+
+func TestLocalBlocksReportOnlyAfterFirewallAcceptance(t *testing.T) {
+	for _, scenario := range []string{"accepted", "audit-failed", "report-failed", "firewall-failed"} {
+		t.Run(scenario, func(t *testing.T) {
+			reporter := &recordingReporter{}
+			service := &Server{MaxTTL: protocol.MaxTTLSeconds, Backend: &recordingBackend{}, Metrics: metrics.NewRegistry("test.example", "test"), Reporter: reporter}
+			if scenario == "audit-failed" {
+				service.Store = failingStore{}
+			}
+			if scenario == "report-failed" {
+				reporter.err = errors.New("outbox unavailable")
+			}
+			if scenario == "firewall-failed" {
+				service.Backend = &failingBackend{}
+			}
+			err := service.Block(context.Background(), net.ParseIP("38.244.29.125"), 900, "sig:env-vcs-probe")
+			if scenario == "firewall-failed" {
+				if err == nil || reporter.calls != 0 {
+					t.Fatal("failed firewall operation was reported")
+				}
+				return
+			}
+			if err != nil || reporter.calls != 1 || reporter.reason != "sig:env-vcs-probe" {
+				t.Fatalf("local ban/report failed: %v %#v", err, reporter)
+			}
+			if err := service.apply(context.Background(), protocol.Decision{Action: "unblock_ip", IP: "38.244.29.125"}); err != nil {
+				t.Fatal(err)
+			}
+			if reporter.calls != 1 {
+				t.Fatal("unblocking generated a report")
+			}
+		})
 	}
 }
 

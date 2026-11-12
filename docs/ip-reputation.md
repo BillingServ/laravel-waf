@@ -17,10 +17,11 @@ The default sources are:
 | [FireHOL Level 2](https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level2.netset) | Yes | No | Recent attacks, combining blocklist.de, DShield, and GreenSnow |
 
 To share your own blocks, connect a private
-[BSRBL registry](bsrbl.md) in the application's `.env`.
-The helper downloads its authenticated JSON feed and can report active agent
-bans during the existing hourly run. Update the Python helper once; the Go
-binary is unchanged. No attack logs are submitted.
+[BSRBL registry](bsrbl.md). The helper downloads its authenticated JSON feed;
+with the updated Go agent, bans are reported directly and cron uses
+`--download-only`. Direct reporting needs a one-time binary update, without an
+additional service or Ansible deployment. The older combined helper mode is
+still supported. No attack logs are submitted.
 
 The Tor exit list alone does not cover IPv6. The `tor_ipv6` source supplements
 it with Onionoo relay data. Onionoo currently measures IPv4 exit addresses;

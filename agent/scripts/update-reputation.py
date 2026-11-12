@@ -53,6 +53,36 @@ REPORT_PREFIX = "LARAVEL_WAF_BSRBL_"
 LEGACY_REPORT_PREFIX = "LARAVEL_WAF_BSABUSEIP_"
 REPORT_KEYS = {"URL", "API_KEY", "REPORT_ENABLED", "STATE_FILE"}
 REPORT_MAX_PER_RUN = 100
+# Cloudflare proxy ranges verified 2026-11-12 against:
+# https://www.cloudflare.com/ips-v4/ and https://www.cloudflare.com/ips-v6/
+CLOUDFLARE_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+    "2400:cb00::/32",
+    "2606:4700::/32",
+    "2803:f800::/32",
+    "2405:b500::/32",
+    "2405:8100::/32",
+    "2a06:98c0::/29",
+    "2c0f:f248::/32",
+))
+
+
+def protected_proxy(address):
+    return any(address.version == prefix.version and address in prefix for prefix in CLOUDFLARE_NETWORKS)
 
 
 def network(value):
@@ -390,7 +420,7 @@ def report_candidates(config, args, now):
         address = ipaddress.ip_address(record["ip"])
         if address.version == 6 and address.ipv4_mapped:
             address = address.ipv4_mapped
-        if record["expires_at"] <= now or not address.is_global or address.is_multicast or address.is_reserved or "%" in str(address):
+        if record["expires_at"] <= now or not address.is_global or address.is_multicast or address.is_reserved or "%" in str(address) or protected_proxy(address):
             continue
         if any(address.version == prefix.version and address in prefix for prefix in args.allowed):
             continue
@@ -441,6 +471,9 @@ def parse_registry(document, now):
         expires = record["expires_at"]
         if expires is not None and (type(expires) is not int or expires <= 0):
             raise ValueError("invalid BSRBL expiry")
+        if protected_proxy(address):
+            LOG.warning("feed=bsrbl ignored protected Cloudflare proxy ip=%s", address)
+            continue
         if expires is None or expires > now:
             prefix = network(str(address))
             entries[prefix] = expires
@@ -489,9 +522,8 @@ def collect_registry(args):
 
 
 def submit_report(config, record, timeout):
-    expires = min(record["expires_at"], int(time.time()) + 30 * 86400 - 5)
     result = registry_request(config, "/api/v1/reports", json.dumps({
-        "ip": record["ip"], "reason": record["reason"], "expires_at": expires,
+        "ip": record["ip"], "reason": record["reason"], "expires_at": None,
     }).encode(), timeout)
     if (not isinstance(result, dict) or result.get("status") != "ok"
             or result.get("ip") != record["ip"]
@@ -499,31 +531,53 @@ def submit_report(config, record, timeout):
         raise ValueError("BSRBL did not acknowledge report")
 
 
+@contextlib.contextmanager
+def report_lock(state_dir):
+    # Reporting must not wait for public-feed downloads or firewall refreshes.
+    # Serialize all reporters so the acknowledgement cursor stays consistent.
+    with (Path(state_dir) / ".report.lock").open("a") as lock:
+        os.fchmod(lock.fileno(), 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def report_active_blocks(args, config):
+    pending, cursor = report_candidates(config, args, time.time())
+    if args.dry_run:
+        LOG.info("dry-run BSRBL reports=%d; no reports or files written", len(pending))
+        return False
+    deadline = time.monotonic() + 30
+    accepted = 0
+    for record in pending[:REPORT_MAX_PER_RUN]:
+        if record["expires_at"] <= time.time():
+            continue
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        submit_report(config, record, min(10, remaining))
+        cursor["sent"][record["ip"]] = {
+            "fingerprint": record["fingerprint"], "expires_at": record["expires_at"],
+        }
+        atomic_write(args.state_dir / "bsrbl-reports.json", json.dumps(cursor).encode())
+        accepted += 1
+    # Include bans created while this batch was in flight. A nonzero result
+    # lets an event-triggered service retry without waiting for another ban.
+    remaining, _ = report_candidates(config, args, time.time())
+    LOG.info("BSRBL acknowledged=%d pending=%d reports", accepted, len(remaining))
+    return bool(remaining)
+
+
 def report_blocks(args):
     try:
         config = report_settings(args)
         if config is None or not config["report_enabled"]:
             return False
-        pending, cursor = report_candidates(config, args, time.time())
-        if args.dry_run:
-            LOG.info("dry-run BSRBL reports=%d; no reports or files written", len(pending))
-            return False
-        deadline = time.monotonic() + 30
-        accepted = 0
-        for record in pending[:REPORT_MAX_PER_RUN]:
-            if record["expires_at"] <= time.time():
-                continue
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            submit_report(config, record, min(10, remaining))
-            cursor["sent"][record["ip"]] = {
-                "fingerprint": record["fingerprint"], "expires_at": record["expires_at"],
-            }
-            atomic_write(args.state_dir / "bsrbl-reports.json", json.dumps(cursor).encode())
-            accepted += 1
-        LOG.info("BSRBL acknowledged=%d pending=%d reports", accepted, len(pending) - accepted)
-        return False
+        lock = contextlib.nullcontext() if args.dry_run else report_lock(args.state_dir)
+        with lock:
+            return report_active_blocks(args, config)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         LOG.error("BSRBL reporting failed; check .env, agent ledger, and registry availability; firewall refresh is unaffected")
         return True
@@ -641,7 +695,9 @@ def arguments(argv=None):
     parser.add_argument("--ip6tables", default="/usr/sbin/ip6tables")
     parser.add_argument("--nginx-geo-file", type=Path, help="optional Nginx geo include; tests and reloads Nginx")
     parser.add_argument("--nginx", default="/usr/sbin/nginx")
-    parser.add_argument("--report-only", action="store_true", help="report active agent bans to BSRBL without downloading feeds or changing firewall rules")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--report-only", action="store_true", help="report active agent bans to BSRBL without downloading feeds or changing firewall rules")
+    mode.add_argument("--download-only", action="store_true", help="refresh public/BSRBL blocks without submitting reports")
     parser.add_argument("--dry-run", action="store_true", help="validate without writing files, firewall rules, or attack reports")
     args = parser.parse_args(argv)
     args.feeds = list(dict.fromkeys(item.strip() for item in args.feeds.split(",") if item.strip()))
@@ -676,7 +732,7 @@ def update(args):
         entries[prefix] = max(expiry, entries.get(prefix, 0))
     failed = failed or shared_failed
     if args.dry_run:
-        report_failed = report_blocks(args)
+        report_failed = False if args.download_only else report_blocks(args)
         LOG.info("dry-run networks=%d; no files or firewall rules changed", len(entries))
         return int(failed or report_failed)
     # Also rebuild empty results: kernel timeouts and Nginx must release expired
@@ -686,7 +742,7 @@ def update(args):
         update_nginx(args.nginx_geo_file, geo_text(entries, args.allowed), args.nginx)
     ipv4 = sum(prefix.version == 4 for prefix in entries)
     LOG.info("active reputation networks=%d ipv4=%d ipv6=%d", len(entries), ipv4, len(entries) - ipv4)
-    report_failed = report_blocks(args)
+    report_failed = False if args.download_only else report_blocks(args)
     return int(failed or report_failed)
 
 
@@ -698,6 +754,8 @@ def main(argv=None):
     if os.geteuid() != 0 and not args.report_only:
         raise RuntimeError("firewall updates require root; use --dry-run to validate feeds")
     args.state_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
+    if args.report_only:
+        return update(args)
     with (args.state_dir / ".update.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return update(args)

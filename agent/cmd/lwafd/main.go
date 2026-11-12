@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/BillingServ/laravel-waf/agent/internal/blocklist"
+	"github.com/BillingServ/laravel-waf/agent/internal/bsrbl"
 	"github.com/BillingServ/laravel-waf/agent/internal/control"
 	"github.com/BillingServ/laravel-waf/agent/internal/firewall"
 	"github.com/BillingServ/laravel-waf/agent/internal/gate"
@@ -61,6 +62,8 @@ func runDaemon() {
 		socketGroup      = flag.String("socket-group", "", "optional group name or numeric GID for the Unix socket")
 		secretFile       = flag.String("secret-file", "", "optional file containing the one shared WAF secret")
 		stateFile        = flag.String("state-file", defaultBlockStateFile, "file storing active block reasons and expiries")
+		bsrblConfig      = flag.String("bsrbl-env-file", "", "optional Laravel .env path; otherwise discovered from Composer signatures")
+		bsrblState       = flag.String("bsrbl-state-file", bsrbl.DefaultStateFile, "durable BSRBL report outbox")
 		ipsetPath        = flag.String("ipset", "ipset", "ipset executable")
 		iptablesPath     = flag.String("iptables", "iptables", "iptables executable")
 		ip6tablesPath    = flag.String("ip6tables", "ip6tables", "ip6tables executable")
@@ -192,6 +195,49 @@ func runDaemon() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	errors := make(chan error, 4)
+	if !*dryRun {
+		executable, _ := os.Executable()
+		workingDirectory, _ := os.Getwd()
+		configPath, configErr := bsrbl.FindEnvFile(*bsrblConfig, commaSeparated(*signaturePaths), executable, workingDirectory)
+		if configErr != nil {
+			logger.Print("BSRBL could not select a Laravel .env; set --bsrbl-env-file to choose one application")
+		} else if configPath != "" {
+			logger.Printf("BSRBL configuration file=%s", configPath)
+		}
+		reporter, reportErr := bsrbl.New(bsrbl.Options{
+			Settings: func() (bsrbl.Settings, error) {
+				if configErr != nil {
+					return bsrbl.Settings{}, configErr
+				}
+				return bsrbl.ReadSettings(configPath)
+			},
+			StateFile: *bsrblState, Logger: logger,
+		})
+		if reportErr != nil {
+			logger.Print("BSRBL reporter could not start; check its private delivery state")
+		} else {
+			decisionServer.Reporter = reporter
+			go reporter.Run(ctx)
+			// Reconcile existing active bans after a restart. Delivery is idempotent.
+			if blockStore != nil {
+				go func() {
+					records, err := blockStore.List()
+					if err != nil {
+						logger.Print("BSRBL could not read existing active bans")
+						return
+					}
+					for _, record := range records {
+						if ctx.Err() != nil {
+							return
+						}
+						if err := reporter.Report(net.ParseIP(record.IP), time.Unix(record.ExpiresAt, 0), record.Reason); err != nil {
+							logger.Print("BSRBL could not queue an existing ban")
+						}
+					}
+				}()
+			}
+		}
+	}
 
 	if *manageIPTables && !*dryRun && *reconcileEvery > 0 {
 		go reconcileFirewallRules(ctx, backend, *reconcileEvery, logger)

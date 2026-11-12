@@ -1,27 +1,34 @@
 # BSRBL reporting and shared blocks
 
-The reputation helper connects the WAF to BSRBL at `https://rbl.bserv.uk`:
+BSRBL at `https://rbl.bserv.uk` has two integrations:
 
-| Request | Permission | Purpose |
+| Component | Request | When |
 | --- | --- | --- |
-| `GET /api/v1/feed` | `read` | Pull active IPv4 and IPv6 blocks into the reputation firewall sets |
-| `POST /api/v1/reports` | `report` | Submit active bans from the existing agent ledger |
+| Existing Go agent | `POST /api/v1/reports` | After a local firewall ban succeeds |
+| Python reputation helper | `GET /api/v1/feed` | On the download cron schedule |
 
-Both requests use `Authorization: Bearer YOUR_KEY`. The helper requires HTTPS, verifies certificates, refuses redirects, and keeps keys out of URLs, logs and cache files. BSRBL block reasons are public on its lookup page; reporting sends the IP, reason and expiry, without request or attack logs.
+Direct reporting covers Go gate signatures/rate limits, signed Laravel bans, and manual `add-ip` decisions. It runs in the existing agent, with no additional service. This requires a one-time Go binary update and restart; no Ansible deployment is needed.
 
-## Create a key on the BSRBL server
+## One-time agent update
 
-Run from the BSRBL application directory as its hosting/PHP account:
+Build the updated binary with `./agent/build.sh` (Linux amd64 by default; set `GOARCH=arm64` for ARM servers). Upload the correct binary to each node. Replace the installed binary atomically, keeping all existing service arguments:
+
+```sh
+sudo install -m 0755 /tmp/lwafd.new /usr/local/bin/lwafd.new
+sudo mv /usr/local/bin/lwafd.new /usr/local/bin/lwafd
+```
+
+Use your actual installed binary path/name if different. No extra unit files or services are required.
+
+## Use the existing Laravel .env
+
+On the BSRBL hosting account, create a separate key for each WAF server:
 
 ```sh
 php bin/console key:create --name=server-1 --scopes=read,report --days=0
 ```
 
-`--days=0` creates a key that stays valid until revoked. Use a separate key for each WAF server. The key is shown once. A key created with only `read` permission can pull the feed but cannot report bans.
-
-## Configure each WAF server
-
-Deploy the updated `agent/scripts/update-reputation.py` from this package. Existing Go binaries do not need rebuilding or restarting. Add to each Laravel application's `.env`:
+Keep the BSRBL settings in the WAF application's existing Laravel `.env`:
 
 ```dotenv
 LARAVEL_WAF_BSRBL_URL=https://rbl.bserv.uk
@@ -29,49 +36,75 @@ LARAVEL_WAF_BSRBL_API_KEY=the-key-for-this-server
 LARAVEL_WAF_BSRBL_REPORT_ENABLED=true
 ```
 
-Use the base URL above, without `/api/v1/feed` or the private admin path. The helper appends the API routes. With a URL and key configured it always pulls the feed. Reporting is opt-in; set `LARAVEL_WAF_BSRBL_REPORT_ENABLED=false` to keep downloads and stop submissions. Remove the BSRBL settings to disable the integration entirely.
-
-For Composer installations at `vendor/billingserv/laravel-waf`, the helper automatically finds the application's `.env`, including deployments using a stable `current` symlink. For other layouts add `--env-file=/absolute/path/to/.env` to the helper command. Process environment values override `.env` values. Parsing is literal, without shell execution or variable interpolation; Laravel's config cache does not affect it.
-
-The default agent ledger is `/var/lib/laravel-waf/blocks.json`. If yours differs:
-
-```dotenv
-LARAVEL_WAF_BSRBL_STATE_FILE=/absolute/path/to/blocks.json
-```
-
-## Run and schedule
-
-Replace `/app` with your actual Laravel application path:
+Then restart the existing agent once to load the updated binary:
 
 ```sh
-# Download and validate feeds; no reports, file writes, or firewall changes.
-sudo /usr/bin/python3 /app/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py --dry-run
-
-# Apply shared/public blocks and report new active local bans now.
-sudo /usr/bin/python3 /app/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py
+sudo systemctl restart lwafd
+sudo journalctl -u lwafd -n 50 --no-pager
 ```
 
-Existing hourly reputation cron jobs automatically include BSRBL after the helper and `.env` are updated. If the host has no job yet, add these entries to root's crontab, adjusting the path:
+Go discovers `<application-root>/.env` from the Composer package path already configured in `--signatures`, for example `/home/bsv3/vendor/billingserv/laravel-waf/resources/rules/core.json`. No new configuration file or template is needed. It re-reads only the BSRBL settings, so key, URL and report-enable changes need no rebuild or restart. Other Laravel secrets are ignored, and no shell execution or variable interpolation occurs. Process environment values override file values.
+
+If the binary itself is inside the Composer package, its path can identify the application too. Otherwise a working directory inside a Laravel application (identified by `artisan` and `composer.json`) is a fallback. The agent never scans other applications' directories. Multiple Composer application roots require an explicit choice: `--bsrbl-env-file=/absolute/path/to/.env`. This flag also supports unusual layouts. The startup log shows the selected configuration path, never its contents.
+
+The service must be able to read the application's `.env`. An application under `/home` needs the same read-only service access used for Composer signatures; see the [existing signature setup](signatures.md#built-in-rules). If only the package directory is exposed, expose the application root instead. `ProtectHome=true` can otherwise hide `.env` from Go. This can be configured directly on the host without Ansible or an additional service.
+
+`--bsrbl-state-file=/absolute/path` optionally overrides the private outbox path. The default uses the existing service's writable state directory. A missing configuration file leaves direct reporting disabled. `REPORT_ENABLED=false` pauses queued delivery and stops capturing new reports. Keys need `read,report` permissions; a read-only key cannot submit bans.
+
+## Make the cron download-only
+
+Deploy the updated Python helper and change the existing root cron entries to:
 
 ```cron
-17 * * * * /usr/bin/python3 /app/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py >> /var/log/lwaf-reputation.log 2>&1
-@reboot /bin/sleep 30 && /usr/bin/python3 /app/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py >> /var/log/lwaf-reputation.log 2>&1
+17 * * * * /usr/bin/python3 /home/bsv3/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py --download-only >> /var/log/lwaf-reputation.log 2>&1
+@reboot /bin/sleep 30 && /usr/bin/python3 /home/bsv3/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py --download-only >> /var/log/lwaf-reputation.log 2>&1
 ```
 
-Run one reputation job per ingress host. Keep any existing `--allow-ips`, `--ports`, or `--nginx-geo-file` options when updating its command. The helper uses the existing public feeds alongside BSRBL. It blocks the configured TCP ports, 80/443 by default, independently of Laravel's log/challenge mode. It does not add downloaded addresses to the agent's local ledger, so shared entries do not create a reporting loop.
+Adjust `/home/bsv3` on other nodes. Keep any existing `--allow-ips`, `--ports`, or `--nginx-geo-file` options. Remove a minute-by-minute `--report-only` cron entry if you previously added one.
 
-## Behaviour and timing
+The Go agent now calls the reporting API automatically after a ban, normally immediately for an idle reporter. HTTP work runs in the background and never waits for the next cron. Other servers still apply a new shared block on their next scheduled feed download.
 
-The helper pulls BSRBL, refreshes the firewall and optional Nginx include, then reports active local bans. A report failure does not prevent the firewall refresh. Up to 100 reports are sent per run within a 30-second reporting budget; failed submissions retry while the local ban remains active. Successfully acknowledged unchanged bans are deduplicated.
+## Delivery and failure behaviour
 
-Polling happens on the helper's schedule. A local ban must still be active when the job reads the agent ledger; short bans can be missed. Another server receives a newly reported block on its next hourly download, potentially roughly two hours after the original ban. This does not install an immediate hook into `lwafs add-ip`. For faster reporting, this same helper can optionally run more frequently with `--report-only`; that mode shares the lock/cursor and does not pull feeds or alter firewall rules.
+The local firewall is updated first. Failed firewall operations and unblock operations do not create reports. Network calls use a five-second timeout, HTTPS certificate verification, a Bearer header and no redirects. The payload contains only IP, reason and `expires_at: null`; no request/attack logs are sent. Reasons are public on the BSRBL lookup page.
 
-Finite bans retain their original expiry, capped to 30 days for unusually long reports. Permanent manual BSRBL entries are refreshed with the feed. A valid empty feed clears this source. Failed or invalid downloads retain a usable private cache for at most `--max-age` (48 hours by default), without extending an individual ban beyond its expiry. Nginx includes update on the helper's schedule; kernel ipset timeouts expire independently.
+Reports are durably queued at `/var/lib/laravel-waf/bsrbl-report-outbox.json` with owner-only permissions. API failures retry in the same agent after about a minute, including after the local ban expires or the agent restarts. Queued delivery is paced to stay below the API's per-key rate limit, so bursts may wait. Successful responses are deduplicated; excluded/protected entries are acknowledged without re-adding them. A local unblock does not revoke a report already accepted by BSRBL; exclude it in BSRBL when a shared block should be removed.
 
-Administrator exclusions prevent automatic reports re-adding an address to BSRBL. They do not override local agent blocks or other public feeds. Use the existing reputation allowlist when an address must bypass reputation blocking on a host.
+The outbox is bounded to 10,000 pending entries and a 16 MiB state file. Storage/capacity errors are logged while the local firewall decision remains accepted. Corrupt delivery state is not silently reset. One agent owns each outbox; custom multiple-agent installations need distinct state paths. Changing the destination URL starts a separate delivery history rather than sending old queued reports to another host.
 
-## Logs and compatibility
+All reports accepted by the updated BSRBL service are permanent until an administrator excludes them. Local agent TTLs remain unchanged. Shared entries are not written to the local agent's block ledger, preventing report loops.
 
-Successful downloads log `feed=bsrbl` with IPv4/IPv6 counts. Reports log `BSRBL acknowledged=... pending=...`. State files are `bsrbl-feed.json` and `bsrbl-reports.json` in the existing reputation state directory, normally `/var/lib/laravel-waf/reputation`, with owner-only file permissions.
+## Downloads and manual backfill
 
-Earlier `LARAVEL_WAF_BSABUSEIP_*` settings are still accepted. If any `LARAVEL_WAF_BSRBL_*` setting is present, the BSRBL setting family is selected as a whole; configure all three values together instead of mixing old and new names. Earlier `bsabuseip-*.json` cache/cursor files are read when their BSRBL replacement is absent. New writes use BSRBL filenames, preserving deduplication and usable cached blocks during upgrades.
+The helper merges BSRBL with the existing public feeds and applies IPv4/IPv6 reputation sets. A valid empty private feed clears this source. Failed downloads retain a usable private cache for at most `--max-age` (48 hours by default); finite manually timed entries keep their original expiry. Fresh hourly downloads keep permanent entries enforced. Default protected TCP ports are 80/443.
+
+```sh
+# Validate downloads without changing firewall rules or submitting reports.
+sudo /usr/bin/python3 /home/bsv3/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py --download-only --dry-run
+
+# Optional one-off backfill of active local bans; no download/firewall refresh.
+sudo /usr/bin/python3 /home/bsv3/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py --report-only
+```
+
+`--report-only` and `--download-only` cannot be combined. The original combined mode remains available for older installations; it reports only bans still active when the helper runs. The helper also reads the existing Laravel `.env` automatically for Composer installations. If the helper is copied outside the Composer package, pass `--env-file=/absolute/path/to/.env` to select the same application as Go.
+
+## Permanent-report policy and Cloudflare
+
+Deploy the updated BSRBL app files (`src/bootstrap.php`, `public/index.php`, `src/view.php`, `bin/console`) and run `php bin/console policy:apply` on its hosting account. This makes retained service reports permanent, including previously expired reports, and excludes old Cloudflare proxy entries. Existing administrator exclusions and explicitly timed manual blocks remain in place.
+
+Cloudflare's shared proxy addresses are protected in the app, Go reporter and Python helper. This does not bypass request inspection. Remove wrongly attributed proxy IPs from every affected node's local agent:
+
+```sh
+sudo lwafd remove-ip 172.64.198.63
+sudo lwafd remove-ip 172.64.198.149
+```
+
+If requests were attributed to the proxy, restore the verified visitor IP at Nginx using the [trusted Cloudflare example](../agent/deploy/cloudflare-real-ip.conf.example). Merge it into existing real-IP configuration, test with `nginx -t`, then reload Nginx manually. Do not trust forwarding headers from arbitrary direct connections. See [Cloudflare's visitor-IP guidance](https://developers.cloudflare.com/support/troubleshooting/restoring-visitor-ips/restoring-original-visitor-ips/).
+
+Behind Cloudflare, enable the [Nginx reputation geo check](ip-reputation.md#traffic-forwarded-by-another-proxy) and keep `--nginx-geo-file=/var/lib/laravel-waf/reputation/nginx.geo` in cron/manual commands. Backend ipsets alone cannot match a forwarded visitor when the network peer is Cloudflare. No Ansible deployment is needed for these direct configuration updates.
+
+The Cloudflare range snapshots in the components were checked on 2026-11-12 against the [IPv4](https://www.cloudflare.com/ips-v4/) and [IPv6](https://www.cloudflare.com/ips-v6/) lists. Keep them synchronized if the published ranges change.
+
+## Compatibility
+
+`LARAVEL_WAF_BSRBL_*` is the current setting family. Earlier `LARAVEL_WAF_BSABUSEIP_*` names remain supported; do not mix families. API-key formats are unchanged. The helper migrates earlier cache/cursor filenames when the BSRBL replacements are absent. New helper state uses `bsrbl-feed.json` and `bsrbl-reports.json` under the existing reputation directory.

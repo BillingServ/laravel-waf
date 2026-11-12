@@ -34,6 +34,10 @@ type BlockObserver interface {
 	ObserveUnblock(net.IP)
 }
 
+type BanReporter interface {
+	Report(net.IP, time.Time, string) error
+}
+
 type Server struct {
 	Socket      string
 	SocketGroup string
@@ -44,6 +48,7 @@ type Server struct {
 	Metrics     *metrics.Registry
 	Logger      *log.Logger
 	Observer    BlockObserver
+	Reporter    BanReporter
 }
 
 // Block applies a locally generated, validated block through the same
@@ -196,6 +201,11 @@ func (s *Server) apply(ctx context.Context, decision protocol.Decision) error {
 
 	s.Metrics.Decision(decision.Action, outcome)
 	s.Metrics.Operation(operation, "accepted", family)
+	if decision.Action == "block_ip" && s.Reporter != nil {
+		if err := s.Reporter.Report(ip, time.Now().Add(time.Duration(decision.TTLSeconds)*time.Second), decision.Reason); err != nil && s.Logger != nil {
+			s.Logger.Print("BSRBL report could not be queued; local firewall block remains active")
+		}
+	}
 
 	return nil
 }

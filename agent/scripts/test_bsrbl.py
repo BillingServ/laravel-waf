@@ -147,15 +147,15 @@ class BSRBLIntegrationTest(unittest.TestCase):
             if endpoint == "/api/v1/feed":
                 return self.document([
                     {"ip": "154.9.244.17", "expires_at": None},
-                    {"ip": "2606:4700:4700::1111", "expires_at": self.now + 600},
+                    {"ip": "2001:4860:4860::8888", "expires_at": self.now + 600},
                 ])
             report = json.loads(payload)
-            self.assertEqual({"ip": "185.220.101.23", "reason": "manual", "expires_at": self.now + 3600}, report)
+            self.assertEqual({"ip": "185.220.101.23", "reason": "manual", "expires_at": None}, report)
             return {"status": "ok", "ip": report["ip"], "result": "accepted"}
         with patch.dict(os.environ, {}, clear=True), patch.object(rep, "collect", return_value=({}, False)), patch.object(rep, "registry_request", side_effect=response), patch.object(rep, "enforce", side_effect=lambda *args: order.append("firewall")) as enforce:
             self.assertEqual(0, rep.update(self.args))
         self.assertEqual(["/api/v1/feed", "firewall", "/api/v1/reports"], order)
-        self.assertEqual({rep.network("154.9.244.17"), rep.network("2606:4700:4700::1111")}, set(enforce.call_args.args[0]))
+        self.assertEqual({rep.network("154.9.244.17"), rep.network("2001:4860:4860::8888")}, set(enforce.call_args.args[0]))
         self.assertEqual(original, self.config["state_file"].read_bytes())
         self.assertNotIn(TOKEN, (self.root / "bsrbl-feed.json").read_text())
         self.assertNotIn(TOKEN, (self.root / "bsrbl-reports.json").read_text())
@@ -185,13 +185,13 @@ class BSRBLIntegrationTest(unittest.TestCase):
         self.assertEqual({}, rep.parse_registry(self.document([]), self.now))
         document = self.document([
             {"ip": "::ffff:154.9.244.17", "expires_at": self.now + 60},
-            {"ip": "2606:4700:4700::1111", "expires_at": self.now - 1},
+            {"ip": "2001:4860:4860::8888", "expires_at": self.now - 1},
         ])
         self.assertEqual({rep.network("154.9.244.17"): self.now + 60}, rep.parse_registry(document, self.now))
 
     def test_rejects_corrupt_private_and_broad_feed_records(self):
         documents = [[], {}, {"version": True, "blocks": []}, self.document([{"ip": "8.8.8.8"}])]
-        for value in ["127.0.0.1", "10.1.1.1", "224.0.0.1", "::ffff:10.0.0.1", "8.8.8.8/24", "2606:4700:4700::1111%eth0"]:
+        for value in ["127.0.0.1", "10.1.1.1", "224.0.0.1", "::ffff:10.0.0.1", "8.8.8.8/24", "2001:4860:4860::8888%eth0"]:
             documents.append(self.document([{"ip": value, "expires_at": None}]))
         documents.append(self.document([{"ip": "8.8.8.8", "expires_at": True}]))
         for document in documents:
@@ -278,15 +278,57 @@ class BSRBLIntegrationTest(unittest.TestCase):
         self.assertNotIn(TOKEN, str(logs.output))
         self.assertFalse((self.root / "bsrbl-reports.json").exists())
 
+    def test_cloudflare_proxies_are_not_reported_or_imported_from_bsrbl(self):
+        proxies = ["172.64.198.63", "172.64.198.149", "::ffff:172.64.198.63", "2606:4700::1234"]
+        for value in proxies:
+            self.ledger([{"ip": value, "reason": "sig:env-vcs-probe", "expires_at": self.now + 3600}])
+            self.assertEqual([], rep.report_candidates(self.config, self.args, self.now)[0])
+            document = self.document([{"ip": value, "expires_at": None}, {"ip": "38.244.29.125", "expires_at": None}])
+            self.assertEqual({rep.network("38.244.29.125"): None}, rep.parse_registry(document, self.now))
+        for value in ["38.244.29.125", "172.63.255.255", "172.72.0.1", "2001:4860:4860::8888"]:
+            self.assertFalse(rep.protected_proxy(ipaddress.ip_address(value)))
+
     def test_report_payload_and_registry_acknowledgement(self):
         record = {"ip": "154.9.244.17", "reason": "manual", "expires_at": self.now + 3600}
         for result in ["accepted", "unchanged", "protected"]:
             with patch.object(rep, "registry_request", return_value={"status": "ok", "ip": record["ip"], "result": result}) as request:
                 rep.submit_report(self.config, record, 10)
                 payload = json.loads(request.call_args.args[2])
-                self.assertEqual(record, payload)
+                self.assertEqual({"ip": record["ip"], "reason": record["reason"], "expires_at": None}, payload)
         with patch.object(rep, "registry_request", return_value={"status": "ok"}), self.assertRaises(ValueError):
             rep.submit_report(self.config, record, 10)
+
+    def test_download_only_never_submits_reports(self):
+        args = rep.arguments(["--state-dir", str(self.root), "--download-only"])
+        with patch.object(rep, "collect", return_value=({}, False)), patch.object(rep, "collect_registry", return_value=({rep.network("38.244.29.125"): self.now + 3600}, False)), patch.object(rep, "enforce") as enforce, patch.object(rep, "report_blocks") as report:
+            self.assertEqual(0, rep.update(args))
+            enforce.assert_called_once()
+            report.assert_not_called()
+        args.dry_run = True
+        with patch.object(rep, "collect", return_value=({}, False)), patch.object(rep, "collect_registry", return_value=({}, False)), patch.object(rep, "enforce") as enforce, patch.object(rep, "report_blocks") as report:
+            self.assertEqual(0, rep.update(args))
+            report.assert_not_called()
+            enforce.assert_not_called()
+
+    def test_report_only_uses_its_own_lock_while_refresh_runs(self):
+        self.ledger()
+        with (self.root / ".update.lock").open("a") as refresh:
+            rep.fcntl.flock(refresh, rep.fcntl.LOCK_EX | rep.fcntl.LOCK_NB)
+            with patch.object(rep, "report_settings", return_value=self.config), patch.object(rep, "submit_report") as report:
+                self.assertEqual(0, rep.main(["--state-dir", str(self.root), "--report-only"]))
+                self.assertEqual(2, report.call_count)
+        self.assertEqual(0o600, (self.root / ".report.lock").stat().st_mode & 0o777)
+
+    def test_partial_backfill_requests_a_retry_and_then_drains(self):
+        self.ledger()
+        with patch.object(rep, "report_settings", return_value=self.config), patch.object(rep, "submit_report") as report, patch.object(rep, "REPORT_MAX_PER_RUN", 1):
+            self.assertTrue(rep.report_blocks(self.args))
+            self.assertFalse(rep.report_blocks(self.args))
+            self.assertEqual(2, report.call_count)
+
+    def test_download_and_report_only_are_mutually_exclusive(self):
+        with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+            rep.arguments(["--download-only", "--report-only"])
 
     def test_firewall_refresh_precedes_reporting_and_retains_public_feeds(self):
         self.args.dry_run = False

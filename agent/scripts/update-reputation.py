@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refresh public/BSRBL reputation ipsets and report bans alongside an existing LWAFD binary."""
+"""Refresh public/BSRBL reputation ipsets; use --report-only for manual ban reporting."""
 
 import argparse
 import contextlib
@@ -697,7 +697,7 @@ def arguments(argv=None):
     parser.add_argument("--nginx", default="/usr/sbin/nginx")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--report-only", action="store_true", help="report active agent bans to BSRBL without downloading feeds or changing firewall rules")
-    mode.add_argument("--download-only", action="store_true", help="refresh public/BSRBL blocks without submitting reports")
+    mode.add_argument("--download-only", action="store_true", help="refresh public/BSRBL blocks without submitting reports (the default)")
     parser.add_argument("--dry-run", action="store_true", help="validate without writing files, firewall rules, or attack reports")
     args = parser.parse_args(argv)
     args.feeds = list(dict.fromkeys(item.strip() for item in args.feeds.split(",") if item.strip()))
@@ -732,9 +732,8 @@ def update(args):
         entries[prefix] = max(expiry, entries.get(prefix, 0))
     failed = failed or shared_failed
     if args.dry_run:
-        report_failed = False if args.download_only else report_blocks(args)
         LOG.info("dry-run networks=%d; no files or firewall rules changed", len(entries))
-        return int(failed or report_failed)
+        return int(failed)
     # Also rebuild empty results: kernel timeouts and Nginx must release expired
     # data, even when every provider is unavailable.
     enforce(entries, args.allowed, args.ports, args.ipset, args.iptables, args.ip6tables)
@@ -742,8 +741,7 @@ def update(args):
         update_nginx(args.nginx_geo_file, geo_text(entries, args.allowed), args.nginx)
     ipv4 = sum(prefix.version == 4 for prefix in entries)
     LOG.info("active reputation networks=%d ipv4=%d ipv6=%d", len(entries), ipv4, len(entries) - ipv4)
-    report_failed = False if args.download_only else report_blocks(args)
-    return int(failed or report_failed)
+    return int(failed)
 
 
 def main(argv=None):

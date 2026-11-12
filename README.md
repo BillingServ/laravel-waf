@@ -105,7 +105,7 @@ application-specific tuning.
 - [`docs/request-rules.md`](docs/request-rules.md): request rules, actions, exclusions, and GeoIP.
 - [`docs/login-protection.md`](docs/login-protection.md): login middleware and authentication events.
 - [`docs/ip-reputation.md`](docs/ip-reputation.md): free reputation feeds, host blocking, and optional Nginx checks without an agent rebuild.
-- [`docs/bsrbl.md`](docs/bsrbl.md): configure direct BSRBL reporting in the agent and a download-only cron.
+- [`docs/bsrbl.md`](docs/bsrbl.md): configure direct BSRBL reporting in the agent and feed downloads through the existing cron.
 - [`docs/notifications.md`](docs/notifications.md): email, Slack, and custom notification sinks.
 - [`docs/challenge.md`](docs/challenge.md): ALTCHA configuration and challenge testing.
 - [`docs/ddos-protection.md`](docs/ddos-protection.md): application rate limiting and layered deployment.

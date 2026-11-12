@@ -137,9 +137,10 @@ The hourly helper pulls your private BSRBL feed. The updated Go agent reports
 accepted bans directly to BSRBL in the background, including gate, Laravel and
 manual bans. This needs a one-time binary update and restart, with no additional
 service or Ansible deployment. It reads BSRBL settings from the existing Laravel
-`.env`, discovered from the Composer signature path. Use `--download-only` in cron;
-see the [integration guide](../docs/bsrbl.md) for discovery and file access details.
-The original helper-based reporting remains available for older binaries.
+`.env`, discovered from the Composer signature path. Python only downloads and
+applies feeds by default, so existing cron commands need no changes; see the
+[integration guide](../docs/bsrbl.md) for discovery and file access details.
+Manual helper-based backfills remain available with `--report-only`.
 
 The standalone [`scripts/update-reputation.py`](scripts/update-reputation.py)
 helper blocks Tor exit addresses, including advertised IPv6 addresses of web

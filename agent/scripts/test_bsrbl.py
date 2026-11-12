@@ -131,7 +131,7 @@ class BSRBLIntegrationTest(unittest.TestCase):
                     rep.registry_request(self.config, "/api/v1/feed")
                 self.assertNotIn(TOKEN, str(caught.exception))
 
-    def test_configured_run_downloads_enforces_and_reports_without_editing_agent_ledger(self):
+    def test_default_run_with_reporting_enabled_downloads_without_reporting_or_editing_agent_ledger(self):
         self.args.env_file = self.root / ".env"
         self.args.env_file.write_text(
             f"{PREFIX}URL=https://rbl.bserv.uk\n{PREFIX}API_KEY={TOKEN}\n"
@@ -149,16 +149,14 @@ class BSRBLIntegrationTest(unittest.TestCase):
                     {"ip": "154.9.244.17", "expires_at": None},
                     {"ip": "2001:4860:4860::8888", "expires_at": self.now + 600},
                 ])
-            report = json.loads(payload)
-            self.assertEqual({"ip": "185.220.101.23", "reason": "manual", "expires_at": None}, report)
-            return {"status": "ok", "ip": report["ip"], "result": "accepted"}
+            self.fail("Default download run attempted to submit a report")
         with patch.dict(os.environ, {}, clear=True), patch.object(rep, "collect", return_value=({}, False)), patch.object(rep, "registry_request", side_effect=response), patch.object(rep, "enforce", side_effect=lambda *args: order.append("firewall")) as enforce:
             self.assertEqual(0, rep.update(self.args))
-        self.assertEqual(["/api/v1/feed", "firewall", "/api/v1/reports"], order)
+        self.assertEqual(["/api/v1/feed", "firewall"], order)
         self.assertEqual({rep.network("154.9.244.17"), rep.network("2001:4860:4860::8888")}, set(enforce.call_args.args[0]))
         self.assertEqual(original, self.config["state_file"].read_bytes())
         self.assertNotIn(TOKEN, (self.root / "bsrbl-feed.json").read_text())
-        self.assertNotIn(TOKEN, (self.root / "bsrbl-reports.json").read_text())
+        self.assertFalse((self.root / "bsrbl-reports.json").exists())
 
     def test_dry_run_does_not_write_a_registry_cache(self):
         self.args.dry_run = True
@@ -298,25 +296,30 @@ class BSRBLIntegrationTest(unittest.TestCase):
         with patch.object(rep, "registry_request", return_value={"status": "ok"}), self.assertRaises(ValueError):
             rep.submit_report(self.config, record, 10)
 
-    def test_download_only_never_submits_reports(self):
-        args = rep.arguments(["--state-dir", str(self.root), "--download-only"])
-        with patch.object(rep, "collect", return_value=({}, False)), patch.object(rep, "collect_registry", return_value=({rep.network("38.244.29.125"): self.now + 3600}, False)), patch.object(rep, "enforce") as enforce, patch.object(rep, "report_blocks") as report:
-            self.assertEqual(0, rep.update(args))
-            enforce.assert_called_once()
-            report.assert_not_called()
-        args.dry_run = True
-        with patch.object(rep, "collect", return_value=({}, False)), patch.object(rep, "collect_registry", return_value=({}, False)), patch.object(rep, "enforce") as enforce, patch.object(rep, "report_blocks") as report:
-            self.assertEqual(0, rep.update(args))
-            report.assert_not_called()
-            enforce.assert_not_called()
+    def test_default_and_explicit_downloads_never_submit_reports(self):
+        for mode in [[], ["--download-only"]]:
+            for dry_run in [False, True]:
+                with self.subTest(mode=mode, dry_run=dry_run):
+                    args = rep.arguments(["--state-dir", str(self.root)] + mode)
+                    args.dry_run = dry_run
+                    with patch.object(rep, "collect", return_value=({}, False)), patch.object(rep, "collect_registry", return_value=({rep.network("38.244.29.125"): self.now + 3600}, False)), patch.object(rep, "enforce") as enforce, patch.object(rep, "report_blocks") as report:
+                        self.assertEqual(0, rep.update(args))
+                        report.assert_not_called()
+                        if dry_run:
+                            enforce.assert_not_called()
+                        else:
+                            enforce.assert_called_once()
 
     def test_report_only_uses_its_own_lock_while_refresh_runs(self):
         self.ledger()
         with (self.root / ".update.lock").open("a") as refresh:
             rep.fcntl.flock(refresh, rep.fcntl.LOCK_EX | rep.fcntl.LOCK_NB)
-            with patch.object(rep, "report_settings", return_value=self.config), patch.object(rep, "submit_report") as report:
+            with patch.object(rep, "report_settings", return_value=self.config), patch.object(rep, "submit_report") as report, patch.object(rep, "collect") as collect, patch.object(rep, "collect_registry") as registry, patch.object(rep, "enforce") as enforce:
                 self.assertEqual(0, rep.main(["--state-dir", str(self.root), "--report-only"]))
                 self.assertEqual(2, report.call_count)
+                collect.assert_not_called()
+                registry.assert_not_called()
+                enforce.assert_not_called()
         self.assertEqual(0o600, (self.root / ".report.lock").stat().st_mode & 0o777)
 
     def test_partial_backfill_requests_a_retry_and_then_drains(self):
@@ -330,15 +333,15 @@ class BSRBLIntegrationTest(unittest.TestCase):
         with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
             rep.arguments(["--download-only", "--report-only"])
 
-    def test_firewall_refresh_precedes_reporting_and_retains_public_feeds(self):
-        self.args.dry_run = False
-        order = []
+    def test_default_refresh_merges_public_and_private_feeds_and_preserves_failures(self):
         public = {rep.network("8.8.8.8"): self.now + 3600}
         shared = {rep.network("154.9.244.17"): self.now + 3600}
-        with patch.object(rep, "collect", return_value=(public, False)), patch.object(rep, "collect_registry", return_value=(shared, False)), patch.object(rep, "enforce", side_effect=lambda *args: order.append("firewall")) as enforce, patch.object(rep, "report_blocks", side_effect=lambda args: order.append("report") or True):
-            self.assertEqual(1, rep.update(self.args))
-        self.assertEqual(["firewall", "report"], order)
-        self.assertEqual(set(public) | set(shared), set(enforce.call_args.args[0]))
+        for public_failed, shared_failed in [(False, False), (True, False), (False, True)]:
+            with self.subTest(public_failed=public_failed, shared_failed=shared_failed):
+                with patch.object(rep, "collect", return_value=(dict(public), public_failed)), patch.object(rep, "collect_registry", return_value=(shared, shared_failed)), patch.object(rep, "enforce") as enforce, patch.object(rep, "report_blocks") as report:
+                    self.assertEqual(int(public_failed or shared_failed), rep.update(self.args))
+                    report.assert_not_called()
+                    self.assertEqual(set(public) | set(shared), set(enforce.call_args.args[0]))
         self.assertEqual("https://lists.blocklist.de/lists/all.txt", rep.FEEDS["blocklist_de"][0])
 
 

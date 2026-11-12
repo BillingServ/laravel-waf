@@ -18,10 +18,11 @@ The default sources are:
 
 To share your own blocks, connect a private
 [BSRBL registry](bsrbl.md). The helper downloads its authenticated JSON feed;
-with the updated Go agent, bans are reported directly and cron uses
-`--download-only`. Direct reporting needs a one-time binary update, without an
-additional service or Ansible deployment. The older combined helper mode is
-still supported. No attack logs are submitted.
+with the updated Go agent, bans are reported directly. Python only downloads
+and applies feeds by default; existing cron commands need no changes. Direct
+reporting needs a one-time binary update, without an additional service or
+Ansible deployment. Manual Python backfills require `--report-only`. No attack
+logs are submitted.
 
 The Tor exit list alone does not cover IPv6. The `tor_ipv6` source supplements
 it with Onionoo relay data. Onionoo currently measures IPv4 exit addresses;

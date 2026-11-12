@@ -51,13 +51,13 @@ The service must be able to read the application's `.env`. An application under 
 
 `--bsrbl-state-file=/absolute/path` optionally overrides the private outbox path. The default uses the existing service's writable state directory. A missing configuration file leaves direct reporting disabled. `REPORT_ENABLED=false` pauses queued delivery and stops capturing new reports. Keys need `read,report` permissions; a read-only key cannot submit bans.
 
-## Make the cron download-only
+## Keep the existing download cron
 
-Deploy the updated Python helper and change the existing root cron entries to:
+Deploy the updated Python helper. Downloads are now the default, so existing cron entries need no changes or extra flags. For example:
 
 ```cron
-17 * * * * /usr/bin/python3 /home/bsv3/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py --download-only >> /var/log/lwaf-reputation.log 2>&1
-@reboot /bin/sleep 30 && /usr/bin/python3 /home/bsv3/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py --download-only >> /var/log/lwaf-reputation.log 2>&1
+17 * * * * /usr/bin/python3 /home/bsv3/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py >> /var/log/lwaf-reputation.log 2>&1
+@reboot /bin/sleep 30 && /usr/bin/python3 /home/bsv3/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py >> /var/log/lwaf-reputation.log 2>&1
 ```
 
 Adjust `/home/bsv3` on other nodes. Keep any existing `--allow-ips`, `--ports`, or `--nginx-geo-file` options. Remove a minute-by-minute `--report-only` cron entry if you previously added one.
@@ -80,13 +80,13 @@ The helper merges BSRBL with the existing public feeds and applies IPv4/IPv6 rep
 
 ```sh
 # Validate downloads without changing firewall rules or submitting reports.
-sudo /usr/bin/python3 /home/bsv3/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py --download-only --dry-run
+sudo /usr/bin/python3 /home/bsv3/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py --dry-run
 
 # Optional one-off backfill of active local bans; no download/firewall refresh.
 sudo /usr/bin/python3 /home/bsv3/vendor/billingserv/laravel-waf/agent/scripts/update-reputation.py --report-only
 ```
 
-`--report-only` and `--download-only` cannot be combined. The original combined mode remains available for older installations; it reports only bans still active when the helper runs. The helper also reads the existing Laravel `.env` automatically for Composer installations. If the helper is copied outside the Composer package, pass `--env-file=/absolute/path/to/.env` to select the same application as Go.
+Normal runs only download and apply feeds, including when `LARAVEL_WAF_BSRBL_REPORT_ENABLED=true` is set for Go. Reporting from Python requires an explicit `--report-only` invocation and includes only bans still active when it runs. `--download-only` remains accepted for compatibility, but is optional and cannot be combined with `--report-only`. Older Go binaries need updating for automatic reporting; the normal Python run no longer submits bans. The helper also reads the existing Laravel `.env` automatically for Composer installations. If the helper is copied outside the Composer package, pass `--env-file=/absolute/path/to/.env` to select the same application as Go.
 
 ## Permanent-report policy and Cloudflare
 

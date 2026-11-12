@@ -16,6 +16,12 @@ The default sources are:
 | [blocklist.de](https://www.blocklist.de/en/export.html) | Yes | Yes | Addresses reported for attacks within the last 48 hours |
 | [FireHOL Level 2](https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level2.netset) | Yes | No | Recent attacks, combining blocklist.de, DShield, and GreenSnow |
 
+To share your own blocks, connect a private
+[BSRBL registry](bsrbl.md) in the application's `.env`.
+The helper downloads its authenticated JSON feed and can report active agent
+bans during the existing hourly run. Update the Python helper once; the Go
+binary is unchanged. No attack logs are submitted.
+
 The Tor exit list alone does not cover IPv6. The `tor_ipv6` source supplements
 it with Onionoo relay data. Onionoo currently measures IPv4 exit addresses;
 its IPv6 relay addresses are associated with exits, rather than measured IPv6

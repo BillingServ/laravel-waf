@@ -133,6 +133,12 @@ Use `--dry-run` while validating the integration. Start with `LARAVEL_WAF_AGENT_
 
 ## IP reputation without rebuilding the agent
 
+The same hourly helper can pull your private BSRBL feed and report active
+bans from the existing agent ledger to it. Configure the URL and a scoped API
+key in the application's `.env` using the [integration guide](../docs/bsrbl.md).
+After updating the Python helper, this needs no Go rebuild, separate agent
+service, or additional cron job. Reports cover bans still active when it runs.
+
 The standalone [`scripts/update-reputation.py`](scripts/update-reputation.py)
 helper blocks Tor exit addresses, including advertised IPv6 addresses of web
 exit relays, Spamhaus DROP networks, and abusive IPs from blocklist.de and

@@ -23,6 +23,7 @@ upstream provider → iptables/ipset → Nginx → Laravel WAF → application
 - Applies country allow and deny rules through a local MaxMind database or a custom GeoIP resolver.
 - Protects login endpoints by IP and identifier, observes Laravel authentication events, and can issue expiring agent block decisions.
 - Blocks Tor exits and abusive IPs/networks through an optional standalone feed helper, without rebuilding the Go agent.
+- Pulls a private BSRBL JSON feed and reports active agent bans through the existing hourly helper, configured in `.env`.
 - Sends security notifications through email or Slack with cooldown deduplication.
 - Exposes bounded Prometheus metrics for decisions, findings, notifications, errors, and latency.
 - Adds standard response security headers without replacing headers set by the application.
@@ -104,6 +105,7 @@ application-specific tuning.
 - [`docs/request-rules.md`](docs/request-rules.md): request rules, actions, exclusions, and GeoIP.
 - [`docs/login-protection.md`](docs/login-protection.md): login middleware and authentication events.
 - [`docs/ip-reputation.md`](docs/ip-reputation.md): free reputation feeds, host blocking, and optional Nginx checks without an agent rebuild.
+- [`docs/bsrbl.md`](docs/bsrbl.md): connect a private BSRBL registry through `.env` without rebuilding the Go agent.
 - [`docs/notifications.md`](docs/notifications.md): email, Slack, and custom notification sinks.
 - [`docs/challenge.md`](docs/challenge.md): ALTCHA configuration and challenge testing.
 - [`docs/ddos-protection.md`](docs/ddos-protection.md): application rate limiting and layered deployment.

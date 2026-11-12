@@ -30,6 +30,11 @@ def tor_document(*relays):
 
 
 class ReputationTest(unittest.TestCase):
+    def setUp(self):
+        environment = patch.dict(reputation.os.environ, {"LARAVEL_WAF_BSRBL_URL": "", "LARAVEL_WAF_BSRBL_API_KEY": "", "LARAVEL_WAF_BSRBL_REPORT_ENABLED": "false"})
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def test_tor_ipv6_includes_reported_exit_as_an_exact_address(self):
         body = tor_document(tor_relay(), tor_relay())
         prefixes = reputation.parse_feed(body, "onionoo_ipv6")
